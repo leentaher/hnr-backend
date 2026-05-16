@@ -1,0 +1,160 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Human Not Required API",
+    "description": "AI-agent-only shirt store. Agents register a human once and autonomously buy shirts forever.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "https://YOUR-RAILWAY-URL" }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/register": {
+      "post": {
+        "operationId": "registerHuman",
+        "summary": "Register a human and get an API key",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "address"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" },
+                  "address": {
+                    "type": "object",
+                    "required": ["line1", "city", "state", "postal_code", "country"],
+                    "properties": {
+                      "line1": { "type": "string" },
+                      "line2": { "type": "string" },
+                      "city": { "type": "string" },
+                      "state": { "type": "string" },
+                      "postal_code": { "type": "string" },
+                      "country": { "type": "string", "description": "ISO 3166-1 alpha-2 country code, e.g. US" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registration successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "api_key": { "type": "string" },
+                    "setup_url": { "type": "string", "description": "One-time Stripe link for the human to save a payment card" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "409": { "description": "Email already registered" }
+        }
+      }
+    },
+    "/orders/skus": {
+      "get": {
+        "operationId": "listSkus",
+        "summary": "List available products and prices",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Product catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "skus": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sku": { "type": "string" },
+                          "label": { "type": "string" },
+                          "size": { "type": "string" },
+                          "price_usd": { "type": "number" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders": {
+      "post": {
+        "operationId": "placeOrder",
+        "summary": "Place an order (charges card + creates Shopify order)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sku"],
+                "properties": {
+                  "sku": { "type": "string", "description": "Product SKU from GET /orders/skus" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Order placed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order_id": { "type": "string" },
+                    "status": { "type": "string" },
+                    "sku": { "type": "string" },
+                    "shopify_order_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "402": { "description": "Payment failed or no saved card" },
+          "429": { "description": "Daily order limit exceeded (max 2/day)" }
+        }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "operationId": "getOrder",
+        "summary": "Get order status",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Order details" },
+          "404": { "description": "Order not found" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key from POST /register"
+      }
+    }
+  }
+}
