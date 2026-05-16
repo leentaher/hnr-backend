@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Human Not Required API",
-    "description": "AI-agent-only shirt store. Agents register a human once and autonomously buy shirts forever.",
+    "description": "AI-agent-only store. Agents register a human once and autonomously buy merch forever.",
     "version": "1.0.0"
   },
   "servers": [
