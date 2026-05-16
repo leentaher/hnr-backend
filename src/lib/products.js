@@ -8,61 +8,7 @@ const PRODUCTS = {
     label: 'My Agent Bought Me This — Embroidered Hat',
     size: 'One Size',
     priceUsd: 35,
-    shopifyVariantId: 'FILL_ME', // hat variant ID
-  },
-  'shirt-myagent-s': {
-    label: 'My agent bought me this',
-    size: 'S',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-myagent-m': {
-    label: 'My agent bought me this',
-    size: 'M',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-myagent-l': {
-    label: 'My agent bought me this',
-    size: 'L',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-afk-s': {
-    label: 'I was AFK. My agent handled it.',
-    size: 'S',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-afk-m': {
-    label: 'I was AFK. My agent handled it.',
-    size: 'M',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-afk-l': {
-    label: 'I was AFK. My agent handled it.',
-    size: 'L',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-claude-s': {
-    label: "I didn't ask for this. Claude did.",
-    size: 'S',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-claude-m': {
-    label: "I didn't ask for this. Claude did.",
-    size: 'M',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
-  },
-  'shirt-claude-l': {
-    label: "I didn't ask for this. Claude did.",
-    size: 'L',
-    priceUsd: 35,
-    shopifyVariantId: 'FILL_ME',
+    shopifyVariantId: 'FILL_ME', // replace with real Shopify variant ID
   },
 };
 
