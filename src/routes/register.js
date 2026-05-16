@@ -33,10 +33,13 @@ router.post('/', async (req, res) => {
     return res.status(429).json({ error: 'rate_limited', message: 'Too many registrations from this IP. Try again in an hour.' });
   }
 
-  const { email, address } = req.body || {};
+  const { email, name, address } = req.body || {};
 
   if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'invalid_field', field: 'email', message: 'A valid email address is required.' });
+  }
+  if (!name || typeof name !== 'string' || name.trim().length < 1) {
+    return res.status(400).json({ error: 'missing_field', field: 'name', message: 'A name is required for the shipping label.' });
   }
   if (!address || !address.line1 || !address.city || !address.state || !address.postal_code || !address.country) {
     return res.status(400).json({
@@ -71,11 +74,10 @@ router.post('/', async (req, res) => {
     });
 
     // 2. Create Stripe Checkout session in setup mode — gives the human a real hosted payment page
-    const appUrl = process.env.APP_URL || 'https://YOUR-RAILWAY-URL';
+    const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: 'setup',
       customer: stripeCustomer.id,
-      payment_method_types: ['card'],
       success_url: `${appUrl}/setup-complete?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/setup-cancel`,
     });
@@ -86,6 +88,7 @@ router.post('/', async (req, res) => {
     customers.set(apiKey, {
       stripeCustomerId: stripeCustomer.id,
       email,
+      name,
       address,
       ordersToday: 0,
       lastOrderDate: null,
@@ -135,11 +138,10 @@ router.post('/resend-setup', async (req, res) => {
   }
 
   try {
-    const appUrl = process.env.APP_URL || 'https://YOUR-RAILWAY-URL';
+    const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: 'setup',
       customer: foundCustomer.stripeCustomerId,
-      payment_method_types: ['card'],
       success_url: `${appUrl}/setup-complete?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/setup-cancel`,
     });

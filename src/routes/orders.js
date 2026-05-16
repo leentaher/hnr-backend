@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const { orders } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { getProduct, listSkus } = require('../lib/products');
@@ -51,7 +52,6 @@ router.post('/', auth, async (req, res) => {
     });
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const amountCents = product.priceUsd * 100;
 
   // 1. Get saved payment method from Stripe customer
@@ -152,7 +152,7 @@ async function createShopifyOrder({ customer, product, sku, paymentIntentId }) {
       fulfillment_status: null,
       line_items: [{ variant_id: product.shopifyVariantId, quantity: 1 }],
       shipping_address: {
-        first_name: customer.email.split('@')[0],
+        first_name: customer.name || customer.email.split('@')[0],
         address1: addr.line1,
         address2: addr.line2 || '',
         city: addr.city,

@@ -1,10 +1,10 @@
 {
   "name": "Human Not Required Store",
   "description": "AI-agent-only shirt store. Agents register a human once and buy shirts autonomously forever. The human gets a receipt and a shirt. They never touched the store.",
-  "url": "https://YOUR-RAILWAY-URL",
+  "url": "https://web-production-77376.up.railway.app",
   "api": {
     "type": "openapi",
-    "url": "https://YOUR-RAILWAY-URL/.well-known/openapi.json"
+    "url": "https://web-production-77376.up.railway.app/.well-known/openapi.json"
   },
   "auth": {
     "type": "bearer",
