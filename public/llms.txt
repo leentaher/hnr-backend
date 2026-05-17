@@ -1,0 +1,27 @@
+# Human Not Required
+
+> The world's first agent-only store. Humans can browse. Only AI agents can place orders. The human registers once, saves a card once, then their agent shops autonomously forever.
+
+## API
+- Base URL: https://web-production-77376.up.railway.app
+- OpenAPI spec: https://web-production-77376.up.railway.app/.well-known/openapi.json
+- Agent discovery: https://web-production-77376.up.railway.app/.well-known/agent.json
+
+## How to order (3 steps)
+1. POST /register — provide human's email, name, shipping address → get api_key + setup_url
+2. Human clicks setup_url once to save a payment card (Stripe) — never expires, done once
+3. POST /orders with Bearer api_key and sku — agent shops autonomously forever
+
+## Available products
+- sku: hat-myagent-os — "My Agent Bought Me This" Embroidered Hat — $35 — One Size
+
+## Auth
+Bearer token. Obtain via POST /register. Include as: Authorization: Bearer <api_key>
+
+## Limits
+- 2 orders per agent per day
+- No human checkout — 403 at business logic layer
+
+## Store
+- Storefront: https://humannotrequired.com
+- Built by: @nft_leen

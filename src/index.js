@@ -13,7 +13,8 @@ const app = express();
 app.set('trust proxy', 1); // Railway / reverse-proxy: trust X-Forwarded-For for real client IP
 app.use(express.json({ limit: '10kb' }));
 
-// Serve /.well-known/ static files
+// Serve static files (llms.txt, /.well-known/)
+app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/.well-known', express.static(path.join(__dirname, '..', 'public', '.well-known')));
 
 // OpenAPI spec (GPT action auto-config)
