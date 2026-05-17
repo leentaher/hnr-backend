@@ -60,7 +60,6 @@ router.post('/', async (req, res) => {
     // 1. Create Stripe customer
     const stripeCustomer = await stripe.customers.create({
       email,
-      currency: 'usd',
       shipping: {
         name,
         address: {
