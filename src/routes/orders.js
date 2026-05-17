@@ -16,7 +16,13 @@ router.get('/skus', (req, res) => {
 
 // GET /orders/:id
 router.get('/:id', auth, async (req, res) => {
-  const order = await getOrder(req.params.id);
+  let order;
+  try {
+    order = await getOrder(req.params.id);
+  } catch (err) {
+    console.error('[orders] DB error on getOrder:', err.message);
+    return res.status(503).json({ error: 'service_unavailable', message: 'Database unreachable. Try again shortly.' });
+  }
   if (!order) return res.status(404).json({ error: 'order_not_found' });
   if (order.api_key !== req.apiKey) return res.status(403).json({ error: 'forbidden' });
   res.json({ order_id: order.order_id, sku: order.sku, status: order.status, created_at: order.created_at });

@@ -8,7 +8,14 @@ async function auth(req, res, next) {
     return res.status(401).json({ error: 'missing_api_key', message: 'Authorization: Bearer <key> required' });
   }
 
-  const customer = await getCustomerByKey(apiKey);
+  let customer;
+  try {
+    customer = await getCustomerByKey(apiKey);
+  } catch (err) {
+    console.error('[auth] DB error:', err.message);
+    return res.status(503).json({ error: 'service_unavailable', message: 'Database unreachable. Try again shortly.' });
+  }
+
   if (!customer) {
     return res.status(401).json({ error: 'invalid_api_key', message: 'API key not found' });
   }
