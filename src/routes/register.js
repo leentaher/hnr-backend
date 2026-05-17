@@ -143,6 +143,7 @@ router.post('/resend-setup', async (req, res) => {
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: 'setup',
       customer: foundCustomer.stripeCustomerId,
+      currency: 'usd',
       success_url: `${appUrl}/setup-complete?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/setup-cancel`,
     });
