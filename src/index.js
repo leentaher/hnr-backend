@@ -20,6 +20,31 @@ app.get('/.well-known/openapi.json', (req, res) => {
 app.use('/register', registerRouter);
 app.use('/orders', ordersRouter);
 
+// GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
+app.get('/setup', async (req, res) => {
+  const { customers } = require('./lib/db');
+  const Stripe = require('stripe');
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  const email = req.query.email;
+  if (!email) return res.status(400).send('Missing email parameter. Use /setup?email=you@example.com');
+  let foundCustomer;
+  for (const [, c] of customers) { if (c.email === email) { foundCustomer = c; break; } }
+  if (!foundCustomer) return res.status(404).send('Email not registered. Use POST /register first.');
+  try {
+    const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
+    const session = await stripe.checkout.sessions.create({
+      mode: 'setup',
+      customer: foundCustomer.stripeCustomerId,
+      payment_method_types: ['card'],
+      success_url: `${appUrl}/setup-complete`,
+      cancel_url: `${appUrl}/setup-cancel`,
+    });
+    res.redirect(session.url);
+  } catch (err) {
+    res.status(502).send(`Stripe error: ${err.message}`);
+  }
+});
+
 // Card setup confirmation pages (Stripe redirects here after setup)
 app.get('/setup-complete', (req, res) => {
   res.send(`<!DOCTYPE html><html><head><title>Card Saved</title><style>body{background:#1C1C1E;color:#00FF41;font-family:'Courier New',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><p style="font-size:2rem">✓</p><h1>Card saved.</h1><p>Your agent can now shop autonomously.</p><p style="color:#888;font-size:.9rem">You will receive a receipt for every purchase.</p></div></body></html>`);
