@@ -3,11 +3,14 @@ const express = require('express');
 const path = require('path');
 const Stripe = require('stripe');
 
-const { initDb } = require('./lib/db');
+const { initDb, getCustomerByEmail } = require('./lib/db');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
 
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
 const app = express();
+app.set('trust proxy', 1); // Railway / reverse-proxy: trust X-Forwarded-For for real client IP
 app.use(express.json({ limit: '10kb' }));
 
 // Serve /.well-known/ static files
@@ -27,8 +30,6 @@ const setupAttempts = new Map();
 
 // GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
 app.get('/setup', async (req, res) => {
-  const { getCustomerByEmail } = require('./lib/db');
-
   // Rate limit: 5 attempts per IP per minute
   const ip = req.ip;
   const now = Date.now();
@@ -45,7 +46,6 @@ app.get('/setup', async (req, res) => {
   if (!foundCustomer) return res.status(404).send('Email not registered. Use POST /register first.');
 
   try {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
     const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
     const session = await stripe.checkout.sessions.create({
       mode: 'setup',
@@ -76,10 +76,11 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // 404
 app.use((req, res) => res.status(404).json({ error: 'not_found' }));
 
-// Global error handler
+// Global error handler — propagate HTTP status from middleware errors (e.g. 413 from body-size limit)
 app.use((err, req, res, next) => {
-  console.error('[unhandled]', err);
-  res.status(500).json({ error: 'internal_error' });
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) console.error('[unhandled]', err);
+  res.status(status).json({ error: err.type || 'internal_error', message: err.message });
 });
 
 const PORT = process.env.PORT || 3000;
