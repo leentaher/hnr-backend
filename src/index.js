@@ -69,7 +69,9 @@ app.get('/shopify/callback', async (req, res) => {
         code,
       }),
     });
-    const data = await response.json();
+    const raw = await response.text();
+    console.log('[shopify-oauth] RAW RESPONSE:', raw);
+    const data = JSON.parse(raw);
     console.log('[shopify-oauth] ACCESS TOKEN:', data.access_token);
     res.send(`Token captured. Check Railway logs for your SHOPIFY_ADMIN_API_KEY. Token starts with: ${data.access_token?.slice(0, 8)}...`);
   } catch (err) {
