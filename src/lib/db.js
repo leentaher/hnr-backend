@@ -68,4 +68,4 @@ async function getOrder(orderId) {
   return r.rows[0] || null;
 }
 
-module.exports = { pool, initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder };
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder };

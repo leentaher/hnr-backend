@@ -10,6 +10,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAILY_REGISTER_LIMIT = 5;
 const registerAttempts = new Map();
 
+const APP_URL = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
+
 // POST /register
 router.post('/', async (req, res) => {
   const ip = req.ip;
@@ -54,32 +56,25 @@ router.post('/', async (req, res) => {
       },
     });
 
-    // 2. Create Stripe Checkout session
-    const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
-    const checkoutSession = await stripe.checkout.sessions.create({
-      mode: 'setup',
-      customer: stripeCustomer.id,
-      payment_method_types: ['card'],
-      success_url: `${appUrl}/setup-complete`,
-      cancel_url: `${appUrl}/setup-cancel`,
-    });
-
-    // 3. Save to database
+    // 2. Save to database
     const apiKey = generateApiKey();
     await createCustomer({ apiKey, stripeCustomerId: stripeCustomer.id, email, name, address });
 
+    // 3. Build setup URL (always fresh — never expires)
+    const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
+
     // 4. Send emails in background
     sendApiKeyEmail({ to: email, apiKey }).catch(err => console.warn('[register] API key email failed:', err.message));
-    sendCardSetupEmail({ to: email, setupUrl: checkoutSession.url }).catch(err => console.warn('[register] Card setup email failed:', err.message));
+    sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[register] Card setup email failed:', err.message));
 
     res.status(201).json({
       api_key: apiKey,
-      setup_url: checkoutSession.url,
+      setup_url: setupUrl,
       message: 'Registration successful. Tell the human to click the setup_url to save their card — after that you can order autonomously forever.',
     });
   } catch (err) {
     console.error('[register] Error:', err.message);
-    res.status(502).json({ error: 'stripe_error', message: err.message });
+    res.status(502).json({ error: 'registration_failed', message: 'Registration failed. Please try again.' });
   }
 });
 
@@ -93,23 +88,10 @@ router.post('/resend-setup', async (req, res) => {
     return res.status(404).json({ error: 'not_found', message: 'Email not registered. Use POST /register first.' });
   }
 
-  try {
-    const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
-    const checkoutSession = await stripe.checkout.sessions.create({
-      mode: 'setup',
-      customer: customer.stripe_customer_id,
-      payment_method_types: ['card'],
-      success_url: `${appUrl}/setup-complete`,
-      cancel_url: `${appUrl}/setup-cancel`,
-    });
+  const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
+  sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[resend-setup] Email failed:', err.message));
 
-    sendCardSetupEmail({ to: email, setupUrl: checkoutSession.url }).catch(err => console.warn('[resend-setup] Email failed:', err.message));
-
-    res.json({ api_key: customer.api_key, setup_url: checkoutSession.url, message: 'New setup link sent to the human.' });
-  } catch (err) {
-    console.error('[resend-setup] Error:', err.message);
-    res.status(502).json({ error: 'stripe_error', message: err.message });
-  }
+  res.json({ api_key: customer.api_key, setup_url: setupUrl, message: 'Setup link sent. The human can click it any time — it never expires.' });
 });
 
 module.exports = router;

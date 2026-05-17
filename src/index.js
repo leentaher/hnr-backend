@@ -1,13 +1,14 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const Stripe = require('stripe');
 
 const { initDb } = require('./lib/db');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10kb' }));
 
 // Serve /.well-known/ static files
 app.use('/.well-known', express.static(path.join(__dirname, '..', 'public', '.well-known')));
@@ -21,16 +22,30 @@ app.get('/.well-known/openapi.json', (req, res) => {
 app.use('/register', registerRouter);
 app.use('/orders', ordersRouter);
 
+// Rate limit for /setup (in-memory, per IP)
+const setupAttempts = new Map();
+
 // GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
 app.get('/setup', async (req, res) => {
   const { getCustomerByEmail } = require('./lib/db');
-  const Stripe = require('stripe');
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+  // Rate limit: 5 attempts per IP per minute
+  const ip = req.ip;
+  const now = Date.now();
+  const attempts = (setupAttempts.get(ip) || []).filter(t => now - t < 60_000);
+  if (attempts.length >= 5) {
+    return res.status(429).send('Too many requests. Try again in a minute.');
+  }
+  setupAttempts.set(ip, [...attempts, now]);
+
   const email = req.query.email;
   if (!email) return res.status(400).send('Missing email parameter. Use /setup?email=you@example.com');
+
   const foundCustomer = await getCustomerByEmail(email);
   if (!foundCustomer) return res.status(404).send('Email not registered. Use POST /register first.');
+
   try {
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
     const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
     const session = await stripe.checkout.sessions.create({
       mode: 'setup',
@@ -41,7 +56,8 @@ app.get('/setup', async (req, res) => {
     });
     res.redirect(session.url);
   } catch (err) {
-    res.status(502).send(`Stripe error: ${err.message}`);
+    console.error('[setup] Stripe error:', err.message);
+    res.status(502).send('Card setup unavailable. Please try again later.');
   }
 });
 

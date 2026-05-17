@@ -21,9 +21,10 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["email", "address"],
+                "required": ["email", "name", "address"],
                 "properties": {
                   "email": { "type": "string", "format": "email" },
+                  "name": { "type": "string", "description": "Full name for shipping label" },
                   "address": {
                     "type": "object",
                     "required": ["line1", "city", "state", "postal_code", "country"],
@@ -50,7 +51,7 @@
                   "type": "object",
                   "properties": {
                     "api_key": { "type": "string" },
-                    "setup_url": { "type": "string", "description": "One-time Stripe link for the human to save a payment card" },
+                    "setup_url": { "type": "string", "description": "Stable URL for the human to save a payment card — never expires, safe to bookmark" },
                     "message": { "type": "string" }
                   }
                 }
@@ -58,6 +59,45 @@
             }
           },
           "409": { "description": "Email already registered" }
+        }
+      }
+    },
+    "/register/resend-setup": {
+      "post": {
+        "operationId": "resendSetup",
+        "summary": "Re-send card setup link to the human",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Setup link returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "api_key": { "type": "string" },
+                    "setup_url": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "Email not registered" }
         }
       }
     },
