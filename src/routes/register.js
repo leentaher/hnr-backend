@@ -138,11 +138,7 @@ router.post('/resend-setup', async (req, res) => {
       cancel_url: `${appUrl}/setup-cancel`,
     });
 
-    try {
-      await sendCardSetupEmail({ to: email, setupUrl: checkoutSession.url });
-    } catch (emailErr) {
-      console.warn('[resend-setup] Email failed:', emailErr.message);
-    }
+    sendCardSetupEmail({ to: email, setupUrl: checkoutSession.url }).catch(err => console.warn('[resend-setup] Email failed:', err.message));
 
     res.json({ setup_url: checkoutSession.url, message: 'New setup link sent to the human.' });
   } catch (err) {
