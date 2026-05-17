@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 
+const { initDb } = require('./lib/db');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
 
@@ -22,19 +23,18 @@ app.use('/orders', ordersRouter);
 
 // GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
 app.get('/setup', async (req, res) => {
-  const { customers } = require('./lib/db');
+  const { getCustomerByEmail } = require('./lib/db');
   const Stripe = require('stripe');
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const email = req.query.email;
   if (!email) return res.status(400).send('Missing email parameter. Use /setup?email=you@example.com');
-  let foundCustomer;
-  for (const [, c] of customers) { if (c.email === email) { foundCustomer = c; break; } }
+  const foundCustomer = await getCustomerByEmail(email);
   if (!foundCustomer) return res.status(404).send('Email not registered. Use POST /register first.');
   try {
     const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
     const session = await stripe.checkout.sessions.create({
       mode: 'setup',
-      customer: foundCustomer.stripeCustomerId,
+      customer: foundCustomer.stripe_customer_id,
       payment_method_types: ['card'],
       success_url: `${appUrl}/setup-complete`,
       cancel_url: `${appUrl}/setup-cancel`,
@@ -67,4 +67,6 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Human Not Required API running on port ${PORT}`));
+initDb()
+  .then(() => app.listen(PORT, () => console.log(`Human Not Required API running on port ${PORT}`)))
+  .catch(err => { console.error('[startup] DB init failed:', err.message); process.exit(1); });
