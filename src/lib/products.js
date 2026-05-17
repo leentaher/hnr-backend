@@ -8,7 +8,7 @@ const PRODUCTS = {
     label: 'My Agent Bought Me This — Embroidered Hat',
     size: 'One Size',
     priceUsd: 35,
-    shopifyVariantId: '7864672911446',
+    shopifyVariantId: '44665203589206',
   },
 };
 
