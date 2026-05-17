@@ -140,7 +140,7 @@ router.post('/resend-setup', async (req, res) => {
 
     sendCardSetupEmail({ to: email, setupUrl: checkoutSession.url }).catch(err => console.warn('[resend-setup] Email failed:', err.message));
 
-    res.json({ setup_url: checkoutSession.url, message: 'New setup link sent to the human.' });
+    res.json({ api_key: foundKey, setup_url: checkoutSession.url, message: 'New setup link sent to the human.' });
   } catch (err) {
     console.error('[resend-setup] Error:', err.message);
     res.status(502).json({ error: 'stripe_error', message: err.message });
