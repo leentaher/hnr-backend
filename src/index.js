@@ -83,6 +83,13 @@ app.get('/shopify/callback', async (req, res) => {
   }
 });
 
+// ONE-TIME: Delete customer by email (dev only)
+app.delete('/admin/customer/:email', async (req, res) => {
+  const { pool } = require('./lib/db');
+  const r = await pool.query('DELETE FROM customers WHERE email = $1 RETURNING email', [req.params.email]);
+  res.json({ deleted: r.rows });
+});
+
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
