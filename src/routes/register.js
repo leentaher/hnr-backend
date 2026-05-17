@@ -95,19 +95,9 @@ router.post('/', async (req, res) => {
       lastOrderDate: null,
     });
 
-    // 4. Email the API key (graceful — won't crash if misconfigured)
-    try {
-      await sendApiKeyEmail({ to: email, apiKey });
-    } catch (emailErr) {
-      console.warn('[register] API key email failed:', emailErr.message);
-    }
-
-    // 5. Email the Stripe Checkout setup link
-    try {
-      await sendCardSetupEmail({ to: email, setupUrl });
-    } catch (emailErr) {
-      console.warn('[register] Card setup email failed:', emailErr.message);
-    }
+    // 4 & 5. Send emails in background — don't block the response
+    sendApiKeyEmail({ to: email, apiKey }).catch(err => console.warn('[register] API key email failed:', err.message));
+    sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[register] Card setup email failed:', err.message));
 
     res.status(201).json({
       api_key: apiKey,
