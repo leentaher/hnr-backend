@@ -54,42 +54,6 @@ app.get('/setup-cancel', (req, res) => {
   res.send(`<!DOCTYPE html><html><head><title>Setup Cancelled</title><style>body{background:#1C1C1E;color:#FF3D8F;font-family:'Courier New',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><h1>Setup cancelled.</h1><p>No card saved. Your agent cannot place orders yet.</p><p style="color:#888;font-size:.9rem">Ask your agent to re-send the setup link when you're ready.</p></div></body></html>`);
 });
 
-// ONE-TIME: Shopify OAuth callback to capture the real Admin API access token
-// Visit: https://human-not-required.myshopify.com/admin/oauth/authorize?client_id=SHOPIFY_CLIENT_ID&scope=write_orders,read_orders,read_products&redirect_uri=https://web-production-77376.up.railway.app/shopify/callback
-app.get('/shopify/callback', async (req, res) => {
-  const { code, shop } = req.query;
-  if (!code || !shop) return res.status(400).send('Missing code or shop');
-  console.log('[shopify-oauth] shop:', shop);
-  console.log('[shopify-oauth] code length:', code?.length);
-  console.log('[shopify-oauth] client_id:', process.env.SHOPIFY_CLIENT_ID);
-  console.log('[shopify-oauth] client_secret prefix:', process.env.SHOPIFY_CLIENT_SECRET?.slice(0, 12));
-  try {
-    const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id: process.env.SHOPIFY_CLIENT_ID,
-        client_secret: process.env.SHOPIFY_CLIENT_SECRET,
-        code,
-      }),
-    });
-    const raw = await response.text();
-    console.log('[shopify-oauth] RAW RESPONSE:', raw);
-    const data = JSON.parse(raw);
-    console.log('[shopify-oauth] ACCESS TOKEN:', data.access_token);
-    res.send(`Token captured. Check Railway logs for your SHOPIFY_ADMIN_API_KEY. Token starts with: ${data.access_token?.slice(0, 8)}...`);
-  } catch (err) {
-    res.status(500).send(`OAuth error: ${err.message}`);
-  }
-});
-
-// ONE-TIME: Delete customer by email (dev only)
-app.delete('/admin/customer/:email', async (req, res) => {
-  const { pool } = require('./lib/db');
-  const r = await pool.query('DELETE FROM customers WHERE email = $1 RETURNING email', [req.params.email]);
-  res.json({ deleted: r.rows });
-});
-
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
