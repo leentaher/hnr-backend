@@ -78,7 +78,7 @@ router.post('/', async (req, res) => {
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: 'setup',
       customer: stripeCustomer.id,
-      currency: 'usd',
+      payment_method_types: ['card'],
       success_url: `${appUrl}/setup-complete?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/setup-cancel`,
     });
@@ -133,7 +133,7 @@ router.post('/resend-setup', async (req, res) => {
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: 'setup',
       customer: foundCustomer.stripeCustomerId,
-      currency: 'usd',
+      payment_method_types: ['card'],
       success_url: `${appUrl}/setup-complete?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/setup-cancel`,
     });
