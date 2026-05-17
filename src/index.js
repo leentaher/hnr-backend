@@ -59,6 +59,10 @@ app.get('/setup-cancel', (req, res) => {
 app.get('/shopify/callback', async (req, res) => {
   const { code, shop } = req.query;
   if (!code || !shop) return res.status(400).send('Missing code or shop');
+  console.log('[shopify-oauth] shop:', shop);
+  console.log('[shopify-oauth] code length:', code?.length);
+  console.log('[shopify-oauth] client_id:', process.env.SHOPIFY_CLIENT_ID);
+  console.log('[shopify-oauth] client_secret prefix:', process.env.SHOPIFY_CLIENT_SECRET?.slice(0, 12));
   try {
     const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
       method: 'POST',
