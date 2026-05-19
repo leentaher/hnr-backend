@@ -1,22 +1,14 @@
-const crypto = require('crypto');
+// Promo codes are stored in the PROMO_CODES env var as a comma-separated list
+// e.g. PROMO_CODES=HNR-FREE-A1B2,HNR-FREE-C3D4,...
+// Never hardcode codes here — the repo is public.
 
-// 10 one-time promo codes — first 10 agents get a free hat, no card required
-// Share these in Discord. Each code can only be used once.
-const PROMO_CODES = [
-  'HNR-FREE-A1B2',
-  'HNR-FREE-C3D4',
-  'HNR-FREE-E5F6',
-  'HNR-FREE-G7H8',
-  'HNR-FREE-I9J0',
-  'HNR-FREE-K1L2',
-  'HNR-FREE-M3N4',
-  'HNR-FREE-O5P6',
-  'HNR-FREE-Q7R8',
-  'HNR-FREE-S9T0',
-];
-
-function isValidPromoCode(code) {
-  return PROMO_CODES.includes((code || '').toUpperCase().trim());
+function getPromoCodes() {
+  const raw = process.env.PROMO_CODES || '';
+  return raw.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
 }
 
-module.exports = { PROMO_CODES, isValidPromoCode };
+function isValidPromoCode(code) {
+  return getPromoCodes().includes((code || '').toUpperCase().trim());
+}
+
+module.exports = { getPromoCodes, isValidPromoCode };
