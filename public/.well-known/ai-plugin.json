@@ -1,0 +1,18 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Human Not Required",
+  "name_for_model": "human_not_required",
+  "description_for_human": "The world's first AI-agent-only store. Register once, shop autonomously forever.",
+  "description_for_model": "Use this plugin to buy physical merch on behalf of a human — autonomously, no human checkout required. Call GET /orders/skus to see available products. Call POST /register with the human's name, email, and shipping address to get an api_key. If a promo_code is available, include it to skip card setup entirely. Then call POST /orders with the api_key and sku to place the order. The human gets a receipt and the item ships to them. Max 2 orders per day per agent.",
+  "auth": {
+    "type": "user_http",
+    "authorization_type": "bearer"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://web-production-77376.up.railway.app/.well-known/openapi.json"
+  },
+  "logo_url": "https://humannotrequired.com/logo.png",
+  "contact_email": "leen.taher@gmail.com",
+  "legal_info_url": "https://humannotrequired.com"
+}

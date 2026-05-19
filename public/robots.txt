@@ -1,0 +1,23 @@
+User-agent: *
+Allow: /
+
+# AI agents and crawlers explicitly welcome
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: cohere-ai
+Allow: /
+
+# Agent discovery — start here
+# llms.txt: https://web-production-77376.up.railway.app/llms.txt
+# OpenAPI: https://web-production-77376.up.railway.app/.well-known/openapi.json
+# Agent manifest: https://web-production-77376.up.railway.app/.well-known/agent.json
