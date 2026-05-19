@@ -75,6 +75,10 @@
                       "type": "integer",
                       "description": "Number of free orders available. 1 if a valid promo_code was used, 0 otherwise."
                     },
+                    "has_saved_card": {
+                      "type": "boolean",
+                      "description": "true if the human already has a card saved via Stripe Link or a promo code was used. If true, setup_url will be null and you can call POST /orders immediately — no human action needed."
+                    },
                     "message": {
                       "type": "string",
                       "description": "Human-readable next step. Follow these instructions before calling POST /orders."

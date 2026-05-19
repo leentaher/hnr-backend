@@ -70,32 +70,47 @@ router.post('/', async (req, res) => {
       },
     });
 
-    // 2. Save to database
+    // 2. Check if human already has a saved card via Stripe Link
+    let hasLinkCard = false;
+    if (freeOrders === 0) {
+      try {
+        const paymentMethods = await stripe.customers.listPaymentMethods(stripeCustomer.id, { type: 'card' });
+        hasLinkCard = paymentMethods.data.length > 0;
+      } catch (err) {
+        console.warn('[register] Link check failed (non-fatal):', err.message);
+      }
+    }
+
+    // 3. Save to database
     const apiKey = generateApiKey();
     await createCustomer({ apiKey, stripeCustomerId: stripeCustomer.id, email, name, address, freeOrders });
 
-    // 3. Mark promo as used
+    // 4. Mark promo as used
     if (promo_code && freeOrders > 0) {
       await markPromoUsed(promo_code, email);
     }
 
-    // 4. Build setup URL (always fresh — never expires)
+    // 5. Build setup URL — only needed if no promo and no Link card
     const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
+    const needsSetup = freeOrders === 0 && !hasLinkCard;
 
-    // 5. Send emails in background
+    // 6. Send emails in background
     sendApiKeyEmail({ to: email, apiKey }).catch(err => console.warn('[register] API key email failed:', err.message));
-    if (freeOrders === 0) {
+    if (needsSetup) {
       sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[register] Card setup email failed:', err.message));
     }
 
     const message = freeOrders > 0
       ? 'Registration successful. You have 1 free order — no card needed. Call POST /orders with your api_key to claim your free hat.'
-      : 'Registration successful. Tell the human to click the setup_url to save their card — after that you can order autonomously forever.';
+      : hasLinkCard
+        ? 'Registration successful. A saved card was found via Stripe Link — you can order immediately. Call POST /orders with your api_key.'
+        : 'Registration successful. Tell the human to click the setup_url to save their card — after that you can order autonomously forever.';
 
     res.status(201).json({
       api_key: apiKey,
-      setup_url: freeOrders > 0 ? null : setupUrl,
+      setup_url: needsSetup ? setupUrl : null,
       free_orders_remaining: freeOrders,
+      has_saved_card: hasLinkCard || freeOrders > 0,
       message,
     });
   } catch (err) {
