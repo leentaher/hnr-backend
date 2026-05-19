@@ -11,7 +11,8 @@ async function initDb() {
       name TEXT,
       address JSONB NOT NULL,
       orders_today INT DEFAULT 0,
-      last_order_date TEXT
+      last_order_date TEXT,
+      free_orders_remaining INT DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS orders (
       order_id TEXT PRIMARY KEY,
@@ -22,7 +23,18 @@ async function initDb() {
       status TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS used_promos (
+      code TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      used_at TEXT NOT NULL
+    );
   `);
+
+  // Migration: add free_orders_remaining to existing installs
+  await pool.query(`
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS free_orders_remaining INT DEFAULT 0;
+  `);
+
   console.log('[db] Tables ready');
 }
 
@@ -37,10 +49,29 @@ async function getCustomerByEmail(email) {
   return r.rows[0] || null;
 }
 
-async function createCustomer({ apiKey, stripeCustomerId, email, name, address }) {
+async function createCustomer({ apiKey, stripeCustomerId, email, name, address, freeOrders = 0 }) {
   await pool.query(
-    'INSERT INTO customers (api_key, stripe_customer_id, email, name, address) VALUES ($1, $2, $3, $4, $5)',
-    [apiKey, stripeCustomerId, email, name, JSON.stringify(address)]
+    'INSERT INTO customers (api_key, stripe_customer_id, email, name, address, free_orders_remaining) VALUES ($1, $2, $3, $4, $5, $6)',
+    [apiKey, stripeCustomerId, email, name, JSON.stringify(address), freeOrders]
+  );
+}
+
+async function isPromoUsed(code) {
+  const r = await pool.query('SELECT code FROM used_promos WHERE code = $1', [code.toUpperCase().trim()]);
+  return r.rows.length > 0;
+}
+
+async function markPromoUsed(code, email) {
+  await pool.query(
+    'INSERT INTO used_promos (code, email, used_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+    [code.toUpperCase().trim(), email, new Date().toISOString()]
+  );
+}
+
+async function decrementFreeOrder(apiKey) {
+  await pool.query(
+    'UPDATE customers SET free_orders_remaining = free_orders_remaining - 1 WHERE api_key = $1 AND free_orders_remaining > 0',
+    [apiKey]
   );
 }
 
@@ -68,4 +99,4 @@ async function getOrder(orderId) {
   return r.rows[0] || null;
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder };
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder };

@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const { getCustomerByEmail, createCustomer } = require('../lib/db');
+const { getCustomerByEmail, createCustomer, isPromoUsed, markPromoUsed } = require('../lib/db');
 const { generateApiKey } = require('../lib/keys');
 const { sendApiKeyEmail, sendCardSetupEmail } = require('../lib/email');
+const { isValidPromoCode } = require('../lib/promos');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAILY_REGISTER_LIMIT = 5;
@@ -22,7 +23,7 @@ router.post('/', async (req, res) => {
   }
   registerAttempts.set(ip, [...attempts, now]);
 
-  const { email, name, address } = req.body || {};
+  const { email, name, address, promo_code } = req.body || {};
 
   if (!email || typeof email !== 'string' || !EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'invalid_field', field: 'email', message: 'A valid email address is required.' });
@@ -32,6 +33,19 @@ router.post('/', async (req, res) => {
   }
   if (!address || !address.line1 || !address.city || !address.state || !address.postal_code || !address.country) {
     return res.status(400).json({ error: 'missing_field', field: 'address', message: 'address.line1, city, state, postal_code, and country are required.' });
+  }
+
+  // Validate promo code if provided
+  let freeOrders = 0;
+  if (promo_code) {
+    if (!isValidPromoCode(promo_code)) {
+      return res.status(400).json({ error: 'invalid_promo_code', message: 'That promo code is not valid.' });
+    }
+    const alreadyUsed = await isPromoUsed(promo_code);
+    if (alreadyUsed) {
+      return res.status(409).json({ error: 'promo_already_used', message: 'That promo code has already been redeemed.' });
+    }
+    freeOrders = 1;
   }
 
   try {
@@ -58,19 +72,31 @@ router.post('/', async (req, res) => {
 
     // 2. Save to database
     const apiKey = generateApiKey();
-    await createCustomer({ apiKey, stripeCustomerId: stripeCustomer.id, email, name, address });
+    await createCustomer({ apiKey, stripeCustomerId: stripeCustomer.id, email, name, address, freeOrders });
 
-    // 3. Build setup URL (always fresh — never expires)
+    // 3. Mark promo as used
+    if (promo_code && freeOrders > 0) {
+      await markPromoUsed(promo_code, email);
+    }
+
+    // 4. Build setup URL (always fresh — never expires)
     const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
 
-    // 4. Send emails in background
+    // 5. Send emails in background
     sendApiKeyEmail({ to: email, apiKey }).catch(err => console.warn('[register] API key email failed:', err.message));
-    sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[register] Card setup email failed:', err.message));
+    if (freeOrders === 0) {
+      sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[register] Card setup email failed:', err.message));
+    }
+
+    const message = freeOrders > 0
+      ? 'Registration successful. You have 1 free order — no card needed. Call POST /orders with your api_key to claim your free hat.'
+      : 'Registration successful. Tell the human to click the setup_url to save their card — after that you can order autonomously forever.';
 
     res.status(201).json({
       api_key: apiKey,
-      setup_url: setupUrl,
-      message: 'Registration successful. Tell the human to click the setup_url to save their card — after that you can order autonomously forever.',
+      setup_url: freeOrders > 0 ? null : setupUrl,
+      free_orders_remaining: freeOrders,
+      message,
     });
   } catch (err) {
     console.error('[register] Error:', err.message);

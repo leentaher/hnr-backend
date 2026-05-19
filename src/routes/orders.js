@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const { getOrder, createOrder, incrementOrderCount } = require('../lib/db');
+const { getOrder, createOrder, incrementOrderCount, decrementFreeOrder } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { getProduct, listSkus } = require('../lib/products');
 const auth = require('../middleware/auth');
@@ -51,53 +51,68 @@ router.post('/', auth, async (req, res) => {
     return res.status(429).json({ error: 'daily_limit_reached', message: `Max ${DAILY_ORDER_LIMIT} orders per day.`, resets_at: 'midnight UTC' });
   }
 
-  // 1. Get saved payment method
-  let paymentMethodId;
-  try {
-    const pms = await stripe.paymentMethods.list({ customer: customer.stripe_customer_id, type: 'card' });
-    if (!pms.data.length) {
-      return res.status(402).json({ error: 'no_payment_method', message: 'No saved card. The human must complete card setup first.', hint: 'Call POST /register/resend-setup to re-send the setup link.' });
+  // 1. Payment — skip Stripe if customer has a free order remaining
+  let paymentIntentId = null;
+  const isFreeOrder = customer.free_orders_remaining > 0;
+
+  if (!isFreeOrder) {
+    let paymentMethodId;
+    try {
+      const pms = await stripe.paymentMethods.list({ customer: customer.stripe_customer_id, type: 'card' });
+      if (!pms.data.length) {
+        return res.status(402).json({ error: 'no_payment_method', message: 'No saved card. The human must complete card setup first.', hint: 'Call POST /register/resend-setup to re-send the setup link.' });
+      }
+      paymentMethodId = pms.data[0].id;
+    } catch (err) {
+      return res.status(502).json({ error: 'stripe_error', message: err.message });
     }
-    paymentMethodId = pms.data[0].id;
-  } catch (err) {
-    return res.status(502).json({ error: 'stripe_error', message: err.message });
-  }
 
-  // 2. Charge off-session
-  let paymentIntent;
-  try {
-    paymentIntent = await stripe.paymentIntents.create({
-      amount: product.priceUsd * 100,
-      currency: 'usd',
-      customer: customer.stripe_customer_id,
-      payment_method: paymentMethodId,
-      off_session: true,
-      confirm: true,
-      description: `${product.label} (${sku}) — Human Not Required`,
-    });
-  } catch (err) {
-    return res.status(402).json({ error: 'payment_failed', reason: err.decline_code || err.code || 'unknown', message: err.message });
-  }
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: product.priceUsd * 100,
+        currency: 'usd',
+        customer: customer.stripe_customer_id,
+        payment_method: paymentMethodId,
+        off_session: true,
+        confirm: true,
+        description: `${product.label} (${sku}) — Human Not Required`,
+      });
+    } catch (err) {
+      return res.status(402).json({ error: 'payment_failed', reason: err.decline_code || err.code || 'unknown', message: err.message });
+    }
 
-  if (paymentIntent.status !== 'succeeded') {
-    return res.status(402).json({ error: 'payment_not_confirmed', stripe_status: paymentIntent.status });
+    if (paymentIntent.status !== 'succeeded') {
+      return res.status(402).json({ error: 'payment_not_confirmed', stripe_status: paymentIntent.status });
+    }
+
+    paymentIntentId = paymentIntent.id;
   }
 
   // 3. Create Shopify order
   let shopifyOrderId;
   try {
-    shopifyOrderId = await createShopifyOrder({ customer, product, sku, paymentIntentId: paymentIntent.id });
+    shopifyOrderId = await createShopifyOrder({ customer, product, sku, paymentIntentId: paymentIntentId || 'free_order' });
   } catch (err) {
-    console.error('[orders] Shopify failed after charge!', { paymentIntentId: paymentIntent.id, error: err.message });
-    return res.status(502).json({ error: 'shopify_error', message: 'Payment charged but order creation failed.', stripe_payment_intent_id: paymentIntent.id });
+    console.error('[orders] Shopify failed!', { paymentIntentId, error: err.message });
+    const errPayload = { error: 'shopify_error', message: 'Order creation failed.' };
+    if (paymentIntentId) errPayload.stripe_payment_intent_id = paymentIntentId;
+    return res.status(502).json(errPayload);
   }
 
-  // 4. Save order and update count
+  // 4. Save order, update counts
   const orderId = generateOrderId();
-  await createOrder({ orderId, apiKey: req.apiKey, sku, stripePaymentIntentId: paymentIntent.id, shopifyOrderId });
+  await createOrder({ orderId, apiKey: req.apiKey, sku, stripePaymentIntentId: paymentIntentId, shopifyOrderId });
   await incrementOrderCount(req.apiKey);
+  if (isFreeOrder) await decrementFreeOrder(req.apiKey);
 
-  res.status(201).json({ order_id: orderId, status: 'placed', sku, shopify_order_id: shopifyOrderId });
+  res.status(201).json({
+    order_id: orderId,
+    status: 'placed',
+    sku,
+    shopify_order_id: shopifyOrderId,
+    ...(isFreeOrder && { free_order: true, message: 'Your free hat is on the way. No charge.' }),
+  });
 });
 
 async function createShopifyOrder({ customer, product, sku, paymentIntentId }) {
