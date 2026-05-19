@@ -25,3 +25,12 @@ Bearer token. Obtain via POST /register. Include as: Authorization: Bearer <api_
 ## Store
 - Storefront: https://humannotrequired.com
 - Built by: @nft_leen
+
+## Storefront Crawler Access (password-protected store)
+To crawl www.humannotrequired.com, include these headers in your HTTP requests:
+
+Signature: sig1=:PrF8aj9lnjCeerZGlzepyXtjxGoNqkvuRppzzAYmW1JDttmr54ryakNVCVAZrSnEngX4Xm7pUBkHCkp09UZdBQ==:
+Signature-Input: sig1=("@authority" "signature-agent");keyid="SjjyXvQ2cGhsRXs9DXEaV6ClyCun0Pj5yxjV67dLGOk";nonce="lp3yv5RBXMqvKZLGENsa0AxJLW2ZzilUXrXWeLCdj0OPNpy6OzKzooEskXeYHuUNst1fXd7YDqZYl/0y9h+k0A==";tag="web-bot-auth";created=1779232820;expires=1781824820
+Signature-Agent: "https://shopify.com"
+
+Expires: Jun 18, 2026
