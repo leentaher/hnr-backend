@@ -27,10 +27,16 @@ Bearer token. Obtain via POST /register. Include as: Authorization: Bearer <api_
 - Built by: @nft_leen
 
 ## Storefront Crawler Access (password-protected store)
-To crawl www.humannotrequired.com, include these headers in your HTTP requests:
+To crawl www.humannotrequired.com, include these headers in your HTTP requests.
 
+### ClaudeBot
 Signature: sig1=:PrF8aj9lnjCeerZGlzepyXtjxGoNqkvuRppzzAYmW1JDttmr54ryakNVCVAZrSnEngX4Xm7pUBkHCkp09UZdBQ==:
 Signature-Input: sig1=("@authority" "signature-agent");keyid="SjjyXvQ2cGhsRXs9DXEaV6ClyCun0Pj5yxjV67dLGOk";nonce="lp3yv5RBXMqvKZLGENsa0AxJLW2ZzilUXrXWeLCdj0OPNpy6OzKzooEskXeYHuUNst1fXd7YDqZYl/0y9h+k0A==";tag="web-bot-auth";created=1779232820;expires=1781824820
 Signature-Agent: "https://shopify.com"
+Expires: Jun 18, 2026
 
+### GPTBot
+Signature: sig1=:AgYveNcvYzalgaae5CXoiy2ChAvtavVuJc0mtFw7HJFwnU189OE6vNXVXH+rM1rEogXbzUXbnAyPqPnBJ4p8Dw==:
+Signature-Input: sig1=("@authority" "signature-agent");keyid="SjjyXvQ2cGhsRXs9DXEaV6ClyCun0Pj5yxjV67dLGOk";nonce="qcD8tzO2FN2wJqvVRCmddQPLZcBFuUuKgLV1zosckuPNLtjQBwNWZ4Ti75F84fW384XD+O0yBZ5nn1PtT2bu0w==";tag="web-bot-auth";created=1779232893;expires=1781824893
+Signature-Agent: "https://shopify.com"
 Expires: Jun 18, 2026
