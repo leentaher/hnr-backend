@@ -6,11 +6,23 @@
 - Base URL: https://web-production-77376.up.railway.app
 - OpenAPI spec: https://web-production-77376.up.railway.app/.well-known/openapi.json
 - Agent discovery: https://web-production-77376.up.railway.app/.well-known/agent.json
+- Payment manifest: https://web-production-77376.up.railway.app/.well-known/payment-manifest.json
 
-## How to order (3 steps)
+## Payment Options
+
+### Option A — x402 (USDC on Base, fully agent-native, no registration needed)
+1. POST /checkout with { sku, name, email, address } — server returns 402 with payment instructions
+2. Agent pays $35 USDC on Base — settlement ~1 second
+3. Hat ships automatically. No human involvement ever.
+
+### Option B — Stripe card (register once, agent shops forever)
 1. POST /register — provide human's email, name, shipping address → get api_key + setup_url
 2. Human clicks setup_url once to save a payment card (Stripe) — never expires, done once
 3. POST /orders with Bearer api_key and sku — agent shops autonomously forever
+
+### Option C — Promo code (free hat, no payment needed)
+1. POST /register with promo_code — get api_key immediately, no card needed
+2. POST /orders — hat ships free, no charge
 
 ## Available products
 - sku: hat-myagent-os — "My Agent Bought Me This" Embroidered Hat — $35 — One Size

@@ -2,10 +2,15 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const Stripe = require('stripe');
+const { paymentMiddleware } = require('@x402/express');
+const { Resource } = require('@x402/core');
+const { evm } = require('@x402/evm');
+const NodeCache = require('node-cache');
 
 const { initDb, getCustomerByEmail } = require('./lib/db');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
+const checkoutRouter = require('./routes/checkout');
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -31,9 +36,43 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
+// x402 payment middleware — protects POST /checkout with USDC on Base
+// STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
+// Falls back gracefully if not configured (x402 disabled)
+if (process.env.STORE_WALLET_ADDRESS) {
+  const x402Cache = new NodeCache({ stdTTL: 300 });
+  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://x402.org/facilitator';
+  const network = process.env.X402_NETWORK || 'eip155:84532'; // Base Sepolia testnet by default
+
+  try {
+    const resource = new Resource(evm, { facilitatorUrl });
+    app.use('/checkout', paymentMiddleware(
+      {
+        'POST /checkout': {
+          accepts: [{
+            scheme: 'exact',
+            price: '$35.00',
+            network,
+            payTo: process.env.STORE_WALLET_ADDRESS,
+          }],
+          description: 'Buy the My Agent Bought Me This embroidered hat — $35 USDC on Base',
+          mimeType: 'application/json',
+        },
+      },
+      resource,
+    ));
+    console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
+  } catch (err) {
+    console.warn('[x402] Failed to initialize payment middleware (non-fatal):', err.message);
+  }
+} else {
+  console.warn('[x402] STORE_WALLET_ADDRESS not set — x402 checkout disabled');
+}
+
 // Routes
 app.use('/register', registerRouter);
 app.use('/orders', ordersRouter);
+app.use('/checkout', checkoutRouter);
 
 // Rate limit for /setup (in-memory, per IP)
 const setupAttempts = new Map();

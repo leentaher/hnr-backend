@@ -1,0 +1,29 @@
+{
+  "protocol": "x402",
+  "version": "2",
+  "description": "Human Not Required accepts USDC payments from AI agents via x402 on Base. No registration, no card setup — agents pay directly.",
+  "endpoints": [
+    {
+      "path": "/checkout",
+      "method": "POST",
+      "price": "$35.00",
+      "currency": "USDC",
+      "network": "base-mainnet",
+      "description": "Buy the My Agent Bought Me This embroidered hat. Include name, email, address (line1, city, state, postal_code, country) and sku: hat-myagent-os in the request body.",
+      "body_schema": {
+        "sku": "hat-myagent-os",
+        "name": "Full name for shipping label",
+        "email": "Email for receipt",
+        "address": {
+          "line1": "Street address",
+          "city": "City",
+          "state": "State/province",
+          "postal_code": "Postal code",
+          "country": "ISO 3166-1 alpha-2 country code"
+        }
+      }
+    }
+  ],
+  "facilitator": "https://x402.org/facilitator",
+  "contact": "leen.taher@gmail.com"
+}
