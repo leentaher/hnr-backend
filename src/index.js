@@ -54,6 +54,12 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
 
+    // Initialize facilitator synchronously before starting the server
+    // so the middleware knows which schemes are supported
+    resourceServer.initialize().catch(err => {
+      console.warn('[x402] Facilitator initialize failed (non-fatal):', err.message);
+    });
+
     app.use(paymentMiddleware(
       {
         'POST /checkout': {
@@ -67,9 +73,6 @@ if (process.env.STORE_WALLET_ADDRESS) {
         },
       },
       resourceServer,
-      undefined, // paywallConfig
-      undefined, // paywall
-      false,     // syncFacilitatorOnStart — avoid unhandled rejection crash on startup
     ));
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
   } catch (err) {
