@@ -61,6 +61,9 @@ if (process.env.STORE_WALLET_ADDRESS) {
         },
       },
       resourceServer,
+      undefined, // paywallConfig
+      undefined, // paywall
+      false,     // syncFacilitatorOnStart — avoid unhandled rejection crash on startup
     ));
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
   } catch (err) {
