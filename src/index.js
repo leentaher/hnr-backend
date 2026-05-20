@@ -54,12 +54,9 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
 
-    // Initialize facilitator synchronously before starting the server
-    // so the middleware knows which schemes are supported
-    resourceServer.initialize().catch(err => {
-      console.warn('[x402] Facilitator initialize failed (non-fatal):', err.message);
-    });
-
+    // syncFacilitatorOnStart=true (default) — the middleware fires initialize() async.
+    // Our process.on('unhandledRejection') handler above prevents a crash if it fails.
+    // The middleware will retry on first request if initial sync didn't complete.
     app.use(paymentMiddleware(
       {
         'POST /checkout': {
