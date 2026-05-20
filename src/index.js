@@ -48,7 +48,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
 
-    app.use('/checkout', paymentMiddleware(
+    app.use(paymentMiddleware(
       {
         'POST /checkout': {
           accepts: {
