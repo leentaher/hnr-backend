@@ -2,9 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const Stripe = require('stripe');
-const { paymentMiddleware } = require('@x402/express');
-const { Resource } = require('@x402/core');
-const { evm } = require('@x402/evm');
+const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
+const { HTTPFacilitatorClient } = require('@x402/core/server');
+const { ExactEvmScheme } = require('@x402/evm/exact/server');
 const NodeCache = require('node-cache');
 
 const { initDb, getCustomerByEmail } = require('./lib/db');
@@ -40,26 +40,27 @@ app.get('/.well-known/openapi.json', (req, res) => {
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
 // Falls back gracefully if not configured (x402 disabled)
 if (process.env.STORE_WALLET_ADDRESS) {
-  const x402Cache = new NodeCache({ stdTTL: 300 });
-  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://x402.org/facilitator';
+  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://facilitator.x402.org';
   const network = process.env.X402_NETWORK || 'eip155:84532'; // Base Sepolia testnet by default
 
   try {
-    const resource = new Resource(evm, { facilitatorUrl });
+    const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
+    const resourceServer = new x402ResourceServer(facilitatorClient)
+      .register(network, new ExactEvmScheme());
+
     app.use('/checkout', paymentMiddleware(
       {
         'POST /checkout': {
-          accepts: [{
+          accepts: {
             scheme: 'exact',
             price: '$35.00',
             network,
             payTo: process.env.STORE_WALLET_ADDRESS,
-          }],
+          },
           description: 'Buy the My Agent Bought Me This embroidered hat — $35 USDC on Base',
-          mimeType: 'application/json',
         },
       },
-      resource,
+      resourceServer,
     ));
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
   } catch (err) {
