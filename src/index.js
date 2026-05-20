@@ -2,10 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const Stripe = require('stripe');
-const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
-const { HTTPFacilitatorClient } = require('@x402/core/server');
-const { ExactEvmScheme } = require('@x402/evm/exact/server');
 const NodeCache = require('node-cache');
+
+// Catch unhandled rejections so Railway logs show the real error instead of just crashing
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[unhandledRejection]', reason);
+});
 
 const { initDb, getCustomerByEmail } = require('./lib/db');
 const registerRouter = require('./routes/register');
@@ -44,6 +46,10 @@ if (process.env.STORE_WALLET_ADDRESS) {
   const network = process.env.X402_NETWORK || 'eip155:84532'; // Base Sepolia testnet by default
 
   try {
+    const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
+    const { HTTPFacilitatorClient } = require('@x402/core/server');
+    const { ExactEvmScheme } = require('@x402/evm/exact/server');
+
     const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
