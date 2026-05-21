@@ -41,9 +41,9 @@ router.post('/', async (req, res) => {
     if (!isValidPromoCode(promo_code)) {
       return res.status(400).json({ error: 'invalid_promo_code', message: 'That promo code is not valid.' });
     }
-    const alreadyUsed = await isPromoUsed(promo_code);
+    const alreadyUsed = await isPromoUsed(promo_code, email);
     if (alreadyUsed) {
-      return res.status(409).json({ error: 'promo_already_used', message: 'That promo code has already been redeemed.' });
+      return res.status(409).json({ error: 'promo_already_used', message: 'That promo code has already been redeemed by this email.' });
     }
     freeOrders = 1;
   }

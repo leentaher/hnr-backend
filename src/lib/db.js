@@ -24,9 +24,10 @@ async function initDb() {
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS used_promos (
-      code TEXT PRIMARY KEY,
+      code TEXT NOT NULL,
       email TEXT NOT NULL,
-      used_at TEXT NOT NULL
+      used_at TEXT NOT NULL,
+      PRIMARY KEY (code, email)
     );
   `);
 
@@ -34,6 +35,17 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE customers ADD COLUMN IF NOT EXISTS free_orders_remaining INT DEFAULT 0;
   `);
+
+  // Migration: change used_promos primary key from (code) to (code, email)
+  // so the same promo code can be used by different emails (one use per email)
+  try {
+    await pool.query(`ALTER TABLE used_promos DROP CONSTRAINT IF EXISTS used_promos_pkey`);
+    await pool.query(`ALTER TABLE used_promos ADD PRIMARY KEY (code, email)`);
+    console.log('[db] Migrated used_promos to composite PK (code, email)');
+  } catch (err) {
+    // Likely already has composite PK — safe to ignore
+    console.log('[db] used_promos PK already migrated or skipped:', err.message);
+  }
 
   console.log('[db] Tables ready');
 }
@@ -56,8 +68,11 @@ async function createCustomer({ apiKey, stripeCustomerId, email, name, address, 
   );
 }
 
-async function isPromoUsed(code) {
-  const r = await pool.query('SELECT code FROM used_promos WHERE code = $1', [code.toUpperCase().trim()]);
+async function isPromoUsed(code, email) {
+  const r = await pool.query(
+    'SELECT code FROM used_promos WHERE code = $1 AND email = $2',
+    [code.toUpperCase().trim(), email.toLowerCase().trim()]
+  );
   return r.rows.length > 0;
 }
 
