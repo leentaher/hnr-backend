@@ -11,6 +11,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@x402/core": "^2.12.0",
     "@x402/evm": "^2.12.0",
     "@x402/express": "^2.12.0",
@@ -19,6 +20,8 @@
     "node-cache": "^5.1.2",
     "nodemailer": "^6.9.7",
     "pg": "^8.20.0",
-    "stripe": "^14.14.0"
+    "stripe": "^14.14.0",
+    "viem": "^2.50.4",
+    "zod": "^4.4.3"
   }
 }
