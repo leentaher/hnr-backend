@@ -84,6 +84,16 @@ app.use('/register', registerRouter);
 app.use('/orders', ordersRouter);
 app.use('/checkout', checkoutRouter);
 
+// MCP HTTP endpoint — loaded via dynamic import (SDK is ESM-only)
+let mcpRouterReady = false;
+import('./routes/mcp.mjs').then(({ createMcpRouter }) => {
+  app.use('/mcp', createMcpRouter());
+  mcpRouterReady = true;
+  console.log('[mcp] HTTP endpoint ready at /mcp');
+}).catch(err => {
+  console.warn('[mcp] Failed to load MCP router (non-fatal):', err.message);
+});
+
 // Rate limit for /setup (in-memory, per IP)
 const setupAttempts = new Map();
 
