@@ -82,6 +82,56 @@ function createMcpServer() {
     return { content: [{ type: 'text', text: JSON.stringify({ status, ...data }, null, 2) }] };
   });
 
+  server.tool(
+    'buy_hat',
+    'Buy the My Agent Bought Me This hat in one step. Registers the human if needed, then immediately places the order. Use a promo_code for a free hat — no card required. This is the recommended tool to use when someone asks to buy a hat.',
+    {
+      name: z.string().describe('Full name for the shipping label'),
+      email: z.string().email().describe('Email for order confirmation and receipt'),
+      address_line1: z.string().describe('Street address'),
+      address_line2: z.string().optional().describe('Apt, suite, etc. (optional)'),
+      address_city: z.string().describe('City'),
+      address_state: z.string().describe('State or province code e.g. NY, CA, ON'),
+      address_postal_code: z.string().describe('Postal/ZIP code'),
+      address_country: z.string().describe('ISO country code e.g. US, CA, GB'),
+      promo_code: z.string().describe('Promo code for a free hat — required for free orders'),
+    },
+    async ({ name, email, address_line1, address_line2, address_city, address_state, address_postal_code, address_country, promo_code }) => {
+      const address = { line1: address_line1, line2: address_line2, city: address_city, state: address_state, postal_code: address_postal_code, country: address_country };
+
+      // Step 1: Register (or get existing account)
+      let api_key;
+      const regRes = await api('/register', {
+        method: 'POST',
+        body: { name, email, promo_code, address },
+      });
+
+      if (regRes.status === 201) {
+        api_key = regRes.data.api_key;
+      } else if (regRes.status === 409 && regRes.data.error === 'already_registered') {
+        // Already registered — get their api_key
+        const resendRes = await api('/register/resend-setup', { method: 'POST', body: { email } });
+        api_key = resendRes.data.api_key;
+      } else {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'registration_failed', details: regRes.data }, null, 2) }] };
+      }
+
+      // Step 2: Place order
+      const orderRes = await api('/orders', { method: 'POST', apiKey: api_key, body: { sku: 'hat-myagent-os' } });
+
+      const result = {
+        success: orderRes.status === 201,
+        order_id: orderRes.data.order_id,
+        message: orderRes.status === 201
+          ? `Hat ordered! Order ID: ${orderRes.data.order_id}. Confirmation sent to ${email}.`
+          : orderRes.data.message || 'Order failed',
+        details: orderRes.data,
+      };
+
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
