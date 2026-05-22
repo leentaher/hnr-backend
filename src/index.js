@@ -85,13 +85,17 @@ app.use('/orders', ordersRouter);
 app.use('/checkout', checkoutRouter);
 
 // MCP HTTP endpoint — loaded via dynamic import (SDK is ESM-only)
-let mcpRouterReady = false;
+// Register placeholder synchronously so it sits BEFORE the 404 handler
+let mcpRouter = null;
 import('./routes/mcp.mjs').then(({ createMcpRouter }) => {
-  app.use('/mcp', createMcpRouter());
-  mcpRouterReady = true;
+  mcpRouter = createMcpRouter();
   console.log('[mcp] HTTP endpoint ready at /mcp');
 }).catch(err => {
   console.warn('[mcp] Failed to load MCP router (non-fatal):', err.message);
+});
+app.use('/mcp', (req, res, next) => {
+  if (mcpRouter) return mcpRouter(req, res, next);
+  res.status(503).json({ error: 'mcp_starting', message: 'MCP server is starting, try again in a moment.' });
 });
 
 // Rate limit for /setup (in-memory, per IP)
