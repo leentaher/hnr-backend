@@ -38,6 +38,26 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
+// Pre-validate POST /checkout before x402 fires — agent never gets charged for a missing-field request
+app.post('/checkout', (req, res, next) => {
+  const { sku, name, email, address } = req.body || {};
+
+  if (!sku) {
+    return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
+  }
+
+  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
+    return res.status(400).json({
+      error: 'needs_address',
+      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
+      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
+      hint: 'Retry POST /checkout with all required fields. No payment is charged until all fields are present.',
+    });
+  }
+
+  next();
+});
+
 // x402 payment middleware — protects POST /checkout with USDC on Base
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
 // Falls back gracefully if not configured (x402 disabled)

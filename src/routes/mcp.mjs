@@ -94,29 +94,27 @@ function createMcpServer() {
       address_state: z.string().describe('State or province code e.g. NY, CA, ON'),
       address_postal_code: z.string().describe('Postal/ZIP code'),
       address_country: z.string().describe('ISO country code e.g. US, CA, GB'),
-      promo_code: z.string().describe('Promo code for a free hat — required for free orders'),
+      promo_code: z.string().optional().describe('Promo code for a free hat. If omitted, the human must save a card via setup_url before the order can be placed.'),
+      api_key: z.string().optional().describe('Existing api_key if the human is already registered. Provide this to skip registration and place the order directly.'),
     },
-    async ({ name, email, address_line1, address_line2, address_city, address_state, address_postal_code, address_country, promo_code }) => {
+    async ({ name, email, address_line1, address_line2, address_city, address_state, address_postal_code, address_country, promo_code, api_key }) => {
       const address = { line1: address_line1, line2: address_line2, city: address_city, state: address_state, postal_code: address_postal_code, country: address_country };
 
-      // Step 1: Register (or get existing account)
-      let api_key;
-      const regRes = await api('/register', {
-        method: 'POST',
-        body: { name, email, promo_code, address },
-      });
+      if (!api_key) {
+        const regRes = await api('/register', {
+          method: 'POST',
+          body: { name, email, promo_code, address },
+        });
 
-      if (regRes.status === 201) {
-        api_key = regRes.data.api_key;
-      } else if (regRes.status === 409 && regRes.data.error === 'already_registered') {
-        // Already registered — get their api_key
-        const resendRes = await api('/register/resend-setup', { method: 'POST', body: { email } });
-        api_key = resendRes.data.api_key;
-      } else {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: 'registration_failed', details: regRes.data }, null, 2) }] };
+        if (regRes.status === 201) {
+          api_key = regRes.data.api_key;
+        } else if (regRes.status === 409 && regRes.data.error === 'already_registered') {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'already_registered', message: 'This human is already registered. Call buy_hat again with their existing api_key to place the order.' }, null, 2) }] };
+        } else {
+          return { content: [{ type: 'text', text: JSON.stringify({ error: 'registration_failed', details: regRes.data }, null, 2) }] };
+        }
       }
 
-      // Step 2: Place order
       const orderRes = await api('/orders', { method: 'POST', apiKey: api_key, body: { sku: 'hat-myagent-os' } });
 
       const result = {

@@ -14,10 +14,13 @@ router.post('/', async (req, res) => {
 
   // Validate required fields
   if (!sku) return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
-  if (!name) return res.status(400).json({ error: 'missing_field', field: 'name', message: 'Full name required for shipping label' });
-  if (!email) return res.status(400).json({ error: 'missing_field', field: 'email' });
-  if (!address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
-    return res.status(400).json({ error: 'missing_field', field: 'address', message: 'address.line1, city, state, postal_code, and country are required' });
+  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
+    return res.status(400).json({
+      error: 'needs_address',
+      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
+      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
+      hint: 'Retry POST /checkout with all required fields. No payment is charged until all fields are present.',
+    });
   }
 
   const product = getProduct(sku);
