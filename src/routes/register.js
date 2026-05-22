@@ -10,6 +10,7 @@ const { isValidPromoCode } = require('../lib/promos');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAILY_REGISTER_LIMIT = 5;
 const registerAttempts = new Map();
+const resendAttempts = new Map();
 
 const APP_URL = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
 
@@ -121,6 +122,14 @@ router.post('/', async (req, res) => {
 
 // POST /register/resend-setup
 router.post('/resend-setup', async (req, res) => {
+  const ip = req.ip;
+  const now = Date.now();
+  const attempts = (resendAttempts.get(ip) || []).filter(t => now - t < 60_000);
+  if (attempts.length >= 3) {
+    return res.status(429).json({ error: 'rate_limited', message: 'Too many resend attempts. Try again in a minute.' });
+  }
+  resendAttempts.set(ip, [...attempts, now]);
+
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'missing_field', field: 'email' });
 
@@ -132,7 +141,7 @@ router.post('/resend-setup', async (req, res) => {
   const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
   sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[resend-setup] Email failed:', err.message));
 
-  res.json({ api_key: customer.api_key, setup_url: setupUrl, message: 'Setup link sent. The human can click it any time — it never expires.' });
+  res.json({ message: 'Setup link sent to the human\'s email. They can click it any time to save their card.' });
 });
 
 module.exports = router;

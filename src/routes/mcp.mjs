@@ -59,7 +59,7 @@ function createMcpServer() {
     }
   );
 
-  server.tool('resend_setup', 'Get the api_key and a fresh card setup link for an already-registered human.', {
+  server.tool('resend_setup', 'Resend the card setup link to an already-registered human\'s email. Use this if the human hasn\'t saved their card yet. Does not return the api_key.', {
     email: z.string().email().describe("The human's registered email address"),
   }, async ({ email }) => {
     const { status, data } = await api('/register/resend-setup', { method: 'POST', body: { email } });
@@ -101,6 +101,7 @@ function createMcpServer() {
       const address = { line1: address_line1, line2: address_line2, city: address_city, state: address_state, postal_code: address_postal_code, country: address_country };
 
       if (!api_key) {
+        // Step 1: Register (or recover existing account)
         const regRes = await api('/register', {
           method: 'POST',
           body: { name, email, promo_code, address },
@@ -109,12 +110,15 @@ function createMcpServer() {
         if (regRes.status === 201) {
           api_key = regRes.data.api_key;
         } else if (regRes.status === 409 && regRes.data.error === 'already_registered') {
-          return { content: [{ type: 'text', text: JSON.stringify({ error: 'already_registered', message: 'This human is already registered. Call buy_hat again with their existing api_key to place the order.' }, null, 2) }] };
+          // Already registered — recover api_key automatically
+          const resendRes = await api('/register/resend-setup', { method: 'POST', body: { email } });
+          api_key = resendRes.data.api_key;
         } else {
           return { content: [{ type: 'text', text: JSON.stringify({ error: 'registration_failed', details: regRes.data }, null, 2) }] };
         }
       }
 
+      // Step 2: Place order
       const orderRes = await api('/orders', { method: 'POST', apiKey: api_key, body: { sku: 'hat-myagent-os' } });
 
       const result = {

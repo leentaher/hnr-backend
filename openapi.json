@@ -116,14 +116,12 @@
         },
         "responses": {
           "200": {
-            "description": "Setup link returned. Share the setup_url with the human if they haven't saved a card yet.",
+            "description": "Setup link sent to the human's email. Ask them to check their inbox and click the link to save their card.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "api_key": { "type": "string", "description": "Their existing API key." },
-                    "setup_url": { "type": "string", "description": "Fresh card setup link — valid immediately." },
                     "message": { "type": "string" }
                   }
                 }
@@ -212,6 +210,77 @@
           "402": { "description": "Payment failed or no saved card. If 'no_payment_method': human needs to complete card setup via setup_url. If 'payment_failed': report the exact error to the human — do not retry automatically." },
           "429": { "description": "Daily order limit reached (max 2/day). Resets at midnight UTC. Do not retry today." },
           "400": { "description": "Invalid or missing SKU. Call GET /orders/skus to see valid options." }
+        }
+      }
+    },
+    "/checkout": {
+      "post": {
+        "operationId": "checkoutX402",
+        "summary": "Buy a hat with USDC on Base — no registration required",
+        "description": "Fully agent-native checkout using the x402 payment protocol. No registration, no saved card, no human action needed.\n\nFlow:\n1. POST /checkout with sku, name, email, and address — server returns 402 with payment instructions\n2. Agent pays $35 USDC on Base using an x402-compatible client (e.g. @x402/fetch)\n3. Agent retries the same request with the X-Payment header containing the signed payment proof\n4. Server verifies payment via the x402 facilitator and creates the Shopify order\n\nThe hat ships to the provided address. A confirmation is tied to the email.\n\nRequires: an x402-compatible HTTP client and a Base wallet funded with USDC.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sku", "name", "email", "address"],
+                "properties": {
+                  "sku": {
+                    "type": "string",
+                    "description": "Product SKU from GET /orders/skus. Currently: 'hat-myagent-os'."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Full name for the shipping label."
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Email address for order confirmation."
+                  },
+                  "address": {
+                    "type": "object",
+                    "required": ["line1", "city", "state", "postal_code", "country"],
+                    "properties": {
+                      "line1": { "type": "string" },
+                      "line2": { "type": "string" },
+                      "city": { "type": "string" },
+                      "state": { "type": "string", "description": "State or province code e.g. NY, ON" },
+                      "postal_code": { "type": "string" },
+                      "country": { "type": "string", "description": "ISO 3166-1 alpha-2 country code e.g. US, CA, GB" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "402": {
+            "description": "Payment required. Response body contains x402 payment instructions. Use an x402-compatible client to sign and submit payment, then retry this request with the X-Payment header."
+          },
+          "201": {
+            "description": "Payment verified and order placed. Hat ships to the provided address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order_id": { "type": "string" },
+                    "status": { "type": "string" },
+                    "sku": { "type": "string" },
+                    "shopify_order_id": { "type": "string" },
+                    "payment": { "type": "string", "description": "Always 'x402_usdc_base' for this endpoint." },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing or invalid field." },
+          "502": { "description": "Payment settled but Shopify order creation failed. You will be contacted to resolve this." }
         }
       }
     },

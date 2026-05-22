@@ -13,6 +13,7 @@ const { initDb, getCustomerByEmail } = require('./lib/db');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
 const checkoutRouter = require('./routes/checkout');
+const emailRouter = require('./routes/email');
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -103,6 +104,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
 app.use('/register', registerRouter);
 app.use('/orders', ordersRouter);
 app.use('/checkout', checkoutRouter);
+app.use('/email', emailRouter);
 
 // MCP HTTP endpoint — loaded via dynamic import (SDK is ESM-only)
 // Register placeholder synchronously so it sits BEFORE the 404 handler
@@ -172,7 +174,10 @@ app.use((req, res) => res.status(404).json({ error: 'not_found' }));
 // Global error handler — propagate HTTP status from middleware errors (e.g. 413 from body-size limit)
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
-  if (status >= 500) console.error('[unhandled]', err);
+  if (status >= 500) {
+    console.error('[unhandled]', err);
+    return res.status(status).json({ error: 'internal_error', message: 'Something went wrong. Please try again.' });
+  }
   res.status(status).json({ error: err.type || 'internal_error', message: err.message });
 });
 
