@@ -125,6 +125,8 @@ async function createShopifyOrder({ customer, product, sku, paymentIntentId }) {
     order: {
       email: customer.email,
       financial_status: 'paid',
+      send_receipt: true,
+      send_fulfillment_receipt: true,
       line_items: [{ variant_id: product.shopifyVariantId, quantity: 1 }],
       shipping_address: {
         first_name: customer.name || customer.email.split('@')[0],
