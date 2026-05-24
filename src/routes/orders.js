@@ -77,6 +77,8 @@ router.post('/', auth, async (req, res) => {
         off_session: true,
         confirm: true,
         description: `${product.label} (${sku}) — Human Not Required`,
+      }, {
+        idempotencyKey: `${req.apiKey}-${sku}-${today}-${ordersToday}`,
       });
     } catch (err) {
       return res.status(402).json({ error: 'payment_failed', reason: err.decline_code || err.code || 'unknown', message: err.message });
