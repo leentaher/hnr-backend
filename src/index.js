@@ -69,15 +69,64 @@ app.post('/checkout', (req, res, next) => {
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
 // Falls back gracefully if not configured (x402 disabled)
 if (process.env.STORE_WALLET_ADDRESS) {
-  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://x402.org/facilitator';
+  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://api.cdp.coinbase.com/platform/v2/x402';
   const network = process.env.X402_NETWORK || 'eip155:84532'; // Base Sepolia testnet by default
 
   try {
     const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
     const { HTTPFacilitatorClient } = require('@x402/core/server');
     const { ExactEvmScheme } = require('@x402/evm/exact/server');
+    const crypto = require('crypto');
 
-    const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
+    // Build a CDP JWT for the given sub-path (verify / settle / supported)
+    function buildCdpJwt(path) {
+      const keyName = process.env.CDP_API_KEY_NAME;
+      const privateKeyPem = process.env.CDP_API_KEY_PRIVATE_KEY?.replace(/\\n/g, '\n');
+      if (!keyName || !privateKeyPem) return null;
+
+      const now = Math.floor(Date.now() / 1000);
+      const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: keyName })).toString('base64url');
+      const payload = Buffer.from(JSON.stringify({
+        sub: keyName, iss: 'cdp', nbf: now, exp: now + 120,
+        uri: `POST api.cdp.coinbase.com/platform/v2/x402/${path}`,
+      })).toString('base64url');
+
+      const signingInput = `${header}.${payload}`;
+      const sign = crypto.createSign('SHA256');
+      sign.update(signingInput);
+      const der = sign.sign({ key: privateKeyPem, format: 'pem', type: 'pkcs8' });
+
+      // Convert DER-encoded EC signature to raw r||s (required by JWT ES256)
+      let offset = 2;
+      if (der[1] === 0x81) offset = 3;
+      offset++;
+      const rLen = der[offset++];
+      let r = der.slice(offset, offset + rLen); offset += rLen;
+      offset++;
+      const sLen = der[offset++];
+      let s = der.slice(offset, offset + sLen);
+      if (r[0] === 0) r = r.slice(1);
+      if (s[0] === 0) s = s.slice(1);
+      const sig = Buffer.concat([Buffer.alloc(32 - r.length), r, Buffer.alloc(32 - s.length), s]).toString('base64url');
+
+      return `${signingInput}.${sig}`;
+    }
+
+    const facilitatorConfig = { url: facilitatorUrl };
+    if (process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY) {
+      facilitatorConfig.createAuthHeaders = async () => {
+        const authFor = (path) => {
+          const token = buildCdpJwt(path);
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        };
+        return { verify: authFor('verify'), settle: authFor('settle'), supported: authFor('supported') };
+      };
+      console.log('[x402] CDP auth configured');
+    } else {
+      console.warn('[x402] CDP_API_KEY_NAME/PRIVATE_KEY not set — facilitator calls will be unauthenticated');
+    }
+
+    const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
 
