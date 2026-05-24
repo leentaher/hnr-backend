@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { hashApiKey } = require('./keys');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -47,12 +48,27 @@ async function initDb() {
     console.log('[db] used_promos PK already migrated or skipped:', err.message);
   }
 
+  // Migration: hash any plain-text api_keys still in the DB.
+  // Plain keys start with 'sk_agent_'; SHA-256 hashes are 64 hex chars and never match that prefix.
+  // Idempotent — safe to run on every startup.
+  const { rowCount } = await pool.query(`
+    UPDATE customers SET api_key = encode(sha256(api_key::bytea), 'hex')
+    WHERE api_key LIKE 'sk_agent_%'
+  `);
+  if (rowCount > 0) {
+    await pool.query(`
+      UPDATE orders SET api_key = encode(sha256(api_key::bytea), 'hex')
+      WHERE api_key LIKE 'sk_agent_%'
+    `);
+    console.log(`[db] Hashed ${rowCount} plain-text api_key(s)`);
+  }
+
   console.log('[db] Tables ready');
 }
 
 // Customers
 async function getCustomerByKey(apiKey) {
-  const r = await pool.query('SELECT * FROM customers WHERE api_key = $1', [apiKey]);
+  const r = await pool.query('SELECT * FROM customers WHERE api_key = $1', [hashApiKey(apiKey)]);
   return r.rows[0] || null;
 }
 
@@ -64,7 +80,7 @@ async function getCustomerByEmail(email) {
 async function createCustomer({ apiKey, stripeCustomerId, email, name, address, freeOrders = 0 }) {
   await pool.query(
     'INSERT INTO customers (api_key, stripe_customer_id, email, name, address, free_orders_remaining) VALUES ($1, $2, $3, $4, $5, $6)',
-    [apiKey, stripeCustomerId, email, name, JSON.stringify(address), freeOrders]
+    [hashApiKey(apiKey), stripeCustomerId, email, name, JSON.stringify(address), freeOrders]
   );
 }
 

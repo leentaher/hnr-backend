@@ -1,4 +1,5 @@
 const { getCustomerByKey } = require('../lib/db');
+const { hashApiKey } = require('../lib/keys');
 
 async function auth(req, res, next) {
   const header = req.headers['authorization'] || '';
@@ -20,7 +21,7 @@ async function auth(req, res, next) {
     return res.status(401).json({ error: 'invalid_api_key', message: 'API key not found' });
   }
 
-  req.apiKey = apiKey;
+  req.apiKey = hashApiKey(apiKey); // store hash so order records never reference the plain key
   req.customer = customer;
   next();
 }
