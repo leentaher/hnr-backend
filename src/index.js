@@ -96,9 +96,10 @@ if (process.env.STORE_WALLET_ADDRESS) {
       if (!cdpKeyObject || !cdpKeyName) return null;
       try {
         const now = Math.floor(Date.now() / 1000);
+        const nonce = crypto.randomBytes(16).toString('hex');
         const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: cdpKeyName })).toString('base64url');
         const payload = Buffer.from(JSON.stringify({
-          sub: cdpKeyName, iss: 'cdp', nbf: now, exp: now + 120,
+          sub: cdpKeyName, iss: 'cdp', nbf: now, exp: now + 120, nonce,
           uri: `POST api.cdp.coinbase.com/platform/v2/x402/${path}`,
         })).toString('base64url');
 
