@@ -89,7 +89,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
         'POST /checkout': {
           accepts: {
             scheme: 'exact',
-            price: '$35.00',
+            price: '$10.00',
             network,
             payTo: process.env.STORE_WALLET_ADDRESS,
           },
