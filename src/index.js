@@ -69,7 +69,7 @@ app.post('/checkout', (req, res, next) => {
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
 // Falls back gracefully if not configured (x402 disabled)
 if (process.env.STORE_WALLET_ADDRESS) {
-  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://api.cdp.coinbase.com/platform/v2/x402';
+  const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://x402.org/facilitator';
   const network = process.env.X402_NETWORK || 'eip155:84532'; // Base Sepolia testnet by default
 
   try {
