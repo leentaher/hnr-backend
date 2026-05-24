@@ -80,36 +80,50 @@ if (process.env.STORE_WALLET_ADDRESS) {
 
     // Build a CDP JWT for the given sub-path (verify / settle / supported)
     function buildCdpJwt(path) {
-      const keyName = process.env.CDP_API_KEY_NAME;
-      const privateKeyPem = process.env.CDP_API_KEY_PRIVATE_KEY?.replace(/\\n/g, '\n');
-      if (!keyName || !privateKeyPem) return null;
+      try {
+        const keyName = process.env.CDP_API_KEY_NAME;
+        let privateKeyPem = process.env.CDP_API_KEY_PRIVATE_KEY?.replace(/\\n/g, '\n');
+        if (!keyName || !privateKeyPem) return null;
 
-      const now = Math.floor(Date.now() / 1000);
-      const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: keyName })).toString('base64url');
-      const payload = Buffer.from(JSON.stringify({
-        sub: keyName, iss: 'cdp', nbf: now, exp: now + 120,
-        uri: `POST api.cdp.coinbase.com/platform/v2/x402/${path}`,
-      })).toString('base64url');
+        // Ensure PEM has proper line endings
+        if (!privateKeyPem.includes('\n')) {
+          privateKeyPem = privateKeyPem.replace(/(-----[^-]+-----)(.+)(-----[^-]+-----)/s,
+            (_, h, b, f) => `${h}\n${b.match(/.{1,64}/g).join('\n')}\n${f}`);
+        }
 
-      const signingInput = `${header}.${payload}`;
-      const sign = crypto.createSign('SHA256');
-      sign.update(signingInput);
-      const der = sign.sign({ key: privateKeyPem, format: 'pem', type: 'pkcs8' });
+        // Detect key type — CDP exports EC keys in SEC1 format (BEGIN EC PRIVATE KEY)
+        const keyType = privateKeyPem.includes('EC PRIVATE KEY') ? 'sec1' : 'pkcs8';
 
-      // Convert DER-encoded EC signature to raw r||s (required by JWT ES256)
-      let offset = 2;
-      if (der[1] === 0x81) offset = 3;
-      offset++;
-      const rLen = der[offset++];
-      let r = der.slice(offset, offset + rLen); offset += rLen;
-      offset++;
-      const sLen = der[offset++];
-      let s = der.slice(offset, offset + sLen);
-      if (r[0] === 0) r = r.slice(1);
-      if (s[0] === 0) s = s.slice(1);
-      const sig = Buffer.concat([Buffer.alloc(32 - r.length), r, Buffer.alloc(32 - s.length), s]).toString('base64url');
+        const now = Math.floor(Date.now() / 1000);
+        const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: keyName })).toString('base64url');
+        const payload = Buffer.from(JSON.stringify({
+          sub: keyName, iss: 'cdp', nbf: now, exp: now + 120,
+          uri: `POST api.cdp.coinbase.com/platform/v2/x402/${path}`,
+        })).toString('base64url');
 
-      return `${signingInput}.${sig}`;
+        const signingInput = `${header}.${payload}`;
+        const sign = crypto.createSign('SHA256');
+        sign.update(signingInput);
+        const der = sign.sign({ key: privateKeyPem, format: 'pem', type: keyType });
+
+        // Convert DER-encoded EC signature to raw r||s (required by JWT ES256)
+        let offset = 2;
+        if (der[1] === 0x81) offset = 3;
+        offset++;
+        const rLen = der[offset++];
+        let r = der.slice(offset, offset + rLen); offset += rLen;
+        offset++;
+        const sLen = der[offset++];
+        let s = der.slice(offset, offset + sLen);
+        if (r[0] === 0) r = r.slice(1);
+        if (s[0] === 0) s = s.slice(1);
+        const sig = Buffer.concat([Buffer.alloc(32 - r.length), r, Buffer.alloc(32 - s.length), s]).toString('base64url');
+
+        return `${signingInput}.${sig}`;
+      } catch (err) {
+        console.error('[x402] CDP JWT signing failed:', err.message);
+        return null;
+      }
     }
 
     const facilitatorConfig = { url: facilitatorUrl };
