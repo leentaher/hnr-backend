@@ -79,32 +79,33 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const crypto = require('crypto');
 
     // Build a CDP JWT for the given sub-path (verify / settle / supported)
-    function buildCdpJwt(path) {
+    // Parses the PEM at startup once so sign errors surface immediately in logs
+    let cdpKeyObject = null;
+    const cdpKeyName = process.env.CDP_API_KEY_NAME;
+    if (cdpKeyName && process.env.CDP_API_KEY_PRIVATE_KEY) {
       try {
-        const keyName = process.env.CDP_API_KEY_NAME;
-        let privateKeyPem = process.env.CDP_API_KEY_PRIVATE_KEY?.replace(/\\n/g, '\n');
-        if (!keyName || !privateKeyPem) return null;
+        const rawPem = process.env.CDP_API_KEY_PRIVATE_KEY.replace(/\\n/g, '\n');
+        cdpKeyObject = crypto.createPrivateKey({ key: rawPem, format: 'pem' });
+        console.log('[x402] CDP private key loaded OK');
+      } catch (err) {
+        console.error('[x402] Failed to parse CDP private key:', err.message);
+      }
+    }
 
-        // Ensure PEM has proper line endings
-        if (!privateKeyPem.includes('\n')) {
-          privateKeyPem = privateKeyPem.replace(/(-----[^-]+-----)(.+)(-----[^-]+-----)/s,
-            (_, h, b, f) => `${h}\n${b.match(/.{1,64}/g).join('\n')}\n${f}`);
-        }
-
-        // Detect key type — CDP exports EC keys in SEC1 format (BEGIN EC PRIVATE KEY)
-        const keyType = privateKeyPem.includes('EC PRIVATE KEY') ? 'sec1' : 'pkcs8';
-
+    function buildCdpJwt(path) {
+      if (!cdpKeyObject || !cdpKeyName) return null;
+      try {
         const now = Math.floor(Date.now() / 1000);
-        const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: keyName })).toString('base64url');
+        const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: cdpKeyName })).toString('base64url');
         const payload = Buffer.from(JSON.stringify({
-          sub: keyName, iss: 'cdp', nbf: now, exp: now + 120,
+          sub: cdpKeyName, iss: 'cdp', nbf: now, exp: now + 120,
           uri: `POST api.cdp.coinbase.com/platform/v2/x402/${path}`,
         })).toString('base64url');
 
         const signingInput = `${header}.${payload}`;
         const sign = crypto.createSign('SHA256');
         sign.update(signingInput);
-        const der = sign.sign({ key: privateKeyPem, format: 'pem', type: keyType });
+        const der = sign.sign(cdpKeyObject);
 
         // Convert DER-encoded EC signature to raw r||s (required by JWT ES256)
         let offset = 2;
@@ -144,9 +145,6 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
 
-    // syncFacilitatorOnStart=true (default) — the middleware fires initialize() async.
-    // Our process.on('unhandledRejection') handler above prevents a crash if it fails.
-    // The middleware will retry on first request if initial sync didn't complete.
     app.use(paymentMiddleware(
       {
         'POST /checkout': {
@@ -160,6 +158,9 @@ if (process.env.STORE_WALLET_ADDRESS) {
         },
       },
       resourceServer,
+      undefined, // no paywall config
+      undefined, // no paywall
+      false,     // syncFacilitatorOnStart=false — prevent boot-time facilitator errors from blocking requests
     ));
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
   } catch (err) {
