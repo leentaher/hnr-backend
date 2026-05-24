@@ -158,9 +158,6 @@ if (process.env.STORE_WALLET_ADDRESS) {
         },
       },
       resourceServer,
-      undefined, // no paywall config
-      undefined, // no paywall
-      false,     // syncFacilitatorOnStart=false — prevent boot-time facilitator errors from blocking requests
     ));
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
   } catch (err) {
