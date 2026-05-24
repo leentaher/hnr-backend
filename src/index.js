@@ -10,6 +10,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const { initDb, getCustomerByEmail } = require('./lib/db');
+const { getProduct } = require('./lib/products');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
 const checkoutRouter = require('./routes/checkout');
@@ -23,7 +24,8 @@ app.set('trust proxy', 1); // Railway / reverse-proxy: trust X-Forwarded-For for
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -45,6 +47,10 @@ app.post('/checkout', (req, res, next) => {
 
   if (!sku) {
     return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
+  }
+
+  if (!getProduct(sku)) {
+    return res.status(400).json({ error: 'invalid_sku', message: `SKU "${sku}" not found`, hint: 'GET /orders/skus to see available products' });
   }
 
   if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
