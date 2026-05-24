@@ -24,8 +24,8 @@ app.set('trust proxy', 1); // Railway / reverse-proxy: trust X-Forwarded-For for
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment');
-  res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, Payment-Signature');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response, Payment-Required');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
