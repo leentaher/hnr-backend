@@ -210,8 +210,9 @@ if (process.env.STORE_WALLET_ADDRESS) {
 // x402 flow — always enabled
 app.use('/checkout', checkoutRouter);
 
-// Stripe flow — disabled when ENABLE_STRIPE=false
-const stripeEnabled = process.env.ENABLE_STRIPE !== 'false';
+// Stripe flow — disabled when ENABLE_STRIPE=false (case-insensitive)
+const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
+console.log(`[stripe] ENABLE_STRIPE="${process.env.ENABLE_STRIPE}" → stripeEnabled=${stripeEnabled}`);
 if (stripeEnabled) {
   app.use('/register', registerRouter);
   app.use('/orders', ordersRouter);
