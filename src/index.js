@@ -41,6 +41,9 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
+// Rate limit: max 2 x402 checkouts per email per day (in-memory, resets on redeploy)
+const checkoutAttempts = new NodeCache({ stdTTL: 86400 }); // 24h TTL
+
 // Pre-validate POST /checkout before x402 fires — agent never gets charged for a missing-field request
 app.post('/checkout', (req, res, next) => {
   const { sku, name, email, address } = req.body || {};
@@ -82,6 +85,18 @@ app.post('/checkout', (req, res, next) => {
   }
   // Normalise to uppercase so "ca" works the same as "CA"
   address.country = address.country.toUpperCase();
+
+  // Rate limit: max 2 x402 orders per email per 24h — checked BEFORE payment fires
+  const emailKey = email.toLowerCase();
+  const attempts = checkoutAttempts.get(emailKey) || 0;
+  if (attempts >= 2) {
+    return res.status(429).json({
+      error: 'rate_limit',
+      message: `${email} has already placed 2 orders today via x402. Try again tomorrow.`,
+      hint: 'Maximum 2 x402 orders per email per 24 hours. No payment was charged.',
+    });
+  }
+  checkoutAttempts.set(emailKey, attempts + 1);
 
   next();
 });
