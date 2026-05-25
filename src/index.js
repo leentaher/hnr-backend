@@ -236,9 +236,6 @@ app.get('/setup-cancel', (req, res) => {
   res.send(`<!DOCTYPE html><html><head><title>Setup Cancelled</title><style>body{background:#1C1C1E;color:#FF3D8F;font-family:'Courier New',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><h1>Setup cancelled.</h1><p>No card saved. Your agent cannot place orders yet.</p><p style="color:#888;font-size:.9rem">Ask your agent to re-send the setup link when you're ready.</p></div></body></html>`);
 });
 
-// Temporary debug endpoint — shows what headers Railway passes through to Express
-app.get('/debug-headers', (req, res) => res.json({ headers: req.headers }));
-
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
