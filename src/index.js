@@ -207,10 +207,26 @@ if (process.env.STORE_WALLET_ADDRESS) {
 }
 
 // Routes
-app.use('/register', registerRouter);
-app.use('/orders', ordersRouter);
+// x402 flow — always enabled
 app.use('/checkout', checkoutRouter);
-app.use('/email', emailRouter);
+
+// Stripe flow — disabled when ENABLE_STRIPE=false
+const stripeEnabled = process.env.ENABLE_STRIPE !== 'false';
+if (stripeEnabled) {
+  app.use('/register', registerRouter);
+  app.use('/orders', ordersRouter);
+  app.use('/email', emailRouter);
+  console.log('[stripe] Stripe flow enabled');
+} else {
+  app.use('/register', (req, res) => res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' }));
+  app.use('/orders', (req, res, next) => {
+    // Allow GET /orders/skus through even when Stripe is disabled
+    if (req.method === 'GET' && req.path === '/skus') return next();
+    res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' });
+  });
+  app.use('/orders', ordersRouter); // still mounts /skus
+  console.log('[stripe] Stripe flow disabled (ENABLE_STRIPE=false)');
+}
 
 // MCP HTTP endpoint — loaded via dynamic import (SDK is ESM-only)
 // Register placeholder synchronously so it sits BEFORE the 404 handler
