@@ -62,6 +62,27 @@ app.post('/checkout', (req, res, next) => {
     });
   }
 
+  // Validate email format — catches bad emails before agent is charged
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({
+      error: 'invalid_email',
+      message: `"${email}" is not a valid email address`,
+      hint: 'Provide a valid email address (e.g. name@example.com). No payment is charged.',
+    });
+  }
+
+  // Validate country is a 2-letter ISO code — catches "Canada" instead of "CA"
+  if (!/^[A-Z]{2}$/.test(address.country.toUpperCase())) {
+    return res.status(400).json({
+      error: 'invalid_country',
+      message: `"${address.country}" is not a valid ISO country code`,
+      hint: 'Use a 2-letter ISO country code e.g. US, CA, GB, AU. No payment is charged.',
+    });
+  }
+  // Normalise to uppercase so "ca" works the same as "CA"
+  address.country = address.country.toUpperCase();
+
   next();
 });
 
