@@ -9,7 +9,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[unhandledRejection]', reason);
 });
 
-const { initDb, getCustomerByEmail } = require('./lib/db');
+const { initDb, getCustomerByEmail, incrementX402RateLimit } = require('./lib/db');
 const { getProduct } = require('./lib/products');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
@@ -41,11 +41,8 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
-// Rate limit: max 2 x402 checkouts per email per day (in-memory, resets on redeploy)
-const checkoutAttempts = new NodeCache({ stdTTL: 86400 }); // 24h TTL
-
 // Pre-validate POST /checkout before x402 fires — agent never gets charged for a missing-field request
-app.post('/checkout', (req, res, next) => {
+app.post('/checkout', async (req, res, next) => {
   const { sku, name, email, address } = req.body || {};
 
   if (!sku) {
@@ -86,17 +83,19 @@ app.post('/checkout', (req, res, next) => {
   // Normalise to uppercase so "ca" works the same as "CA"
   address.country = address.country.toUpperCase();
 
-  // Rate limit: max 2 x402 orders per email per 24h — checked BEFORE payment fires
-  const emailKey = email.toLowerCase();
-  const attempts = checkoutAttempts.get(emailKey) || 0;
-  if (attempts >= 2) {
-    return res.status(429).json({
-      error: 'rate_limit',
-      message: `${email} has already placed 2 orders today via x402. Try again tomorrow.`,
-      hint: 'Maximum 2 x402 orders per email per 24 hours. No payment was charged.',
-    });
+  // Rate limit: max 2 x402 orders per email per day — DB-backed, atomic, race-safe
+  try {
+    const count = await incrementX402RateLimit(email);
+    if (count > 2) {
+      return res.status(429).json({
+        error: 'rate_limit',
+        message: `${email} has already placed 2 orders today via x402. Try again tomorrow.`,
+        hint: 'Maximum 2 x402 orders per email per 24 hours. No payment was charged.',
+      });
+    }
+  } catch (err) {
+    console.error('[checkout] Rate limit DB error (non-fatal, allowing through):', err.message);
   }
-  checkoutAttempts.set(emailKey, attempts + 1);
 
   next();
 });

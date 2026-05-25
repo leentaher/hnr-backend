@@ -32,6 +32,16 @@ async function initDb() {
     );
   `);
 
+  // x402 rate limit table — atomic per-email daily counter (survives redeploys, race-safe)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS x402_rate_limit (
+      email TEXT NOT NULL,
+      date TEXT NOT NULL,
+      count INT DEFAULT 0,
+      PRIMARY KEY (email, date)
+    );
+  `);
+
   // Migration: add free_orders_remaining to existing installs
   await pool.query(`
     ALTER TABLE customers ADD COLUMN IF NOT EXISTS free_orders_remaining INT DEFAULT 0;
@@ -130,4 +140,18 @@ async function getOrder(orderId) {
   return r.rows[0] || null;
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder };
+// x402 rate limit — atomically increments counter, returns new count
+// PostgreSQL handles concurrent requests safely via its transaction model
+async function incrementX402RateLimit(email) {
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await pool.query(`
+    INSERT INTO x402_rate_limit (email, date, count)
+    VALUES ($1, $2, 1)
+    ON CONFLICT (email, date) DO UPDATE
+    SET count = x402_rate_limit.count + 1
+    RETURNING count
+  `, [email.toLowerCase(), today]);
+  return r.rows[0].count; // new count after increment
+}
+
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, incrementX402RateLimit };
