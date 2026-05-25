@@ -1,7 +1,4 @@
 // SKU catalog with prices and Shopify variant IDs
-// Step 4: Replace FILL_ME values with real Shopify variant IDs.
-// Get them: Shopify Admin → Products → click product → click variant → ID is in the URL
-// e.g. https://admin.shopify.com/store/human-not-required/products/123/variants/456 → ID is 456
 
 const PRODUCTS = {
   'hat-myagent-os': {

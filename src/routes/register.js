@@ -12,6 +12,18 @@ const DAILY_REGISTER_LIMIT = 5;
 const registerAttempts = new Map();
 const resendAttempts = new Map();
 
+// Prune stale IPs every 5 minutes — prevents unbounded Map growth
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const map of [registerAttempts, resendAttempts]) {
+    for (const [ip, times] of map.entries()) {
+      const fresh = times.filter(t => t > cutoff);
+      if (fresh.length === 0) map.delete(ip);
+      else map.set(ip, fresh);
+    }
+  }
+}, 5 * 60_000).unref();
+
 const APP_URL = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
 
 // POST /register

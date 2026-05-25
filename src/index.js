@@ -246,6 +246,16 @@ app.use('/mcp', (req, res, next) => {
 // Rate limit for /setup (in-memory, per IP)
 const setupAttempts = new Map();
 
+// Prune IPs that haven't hit /setup in the last minute — prevents unbounded Map growth
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [ip, times] of setupAttempts.entries()) {
+    const fresh = times.filter(t => t > cutoff);
+    if (fresh.length === 0) setupAttempts.delete(ip);
+    else setupAttempts.set(ip, fresh);
+  }
+}, 5 * 60_000).unref(); // unref so it doesn't keep the process alive during tests
+
 // GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
 app.get('/setup', async (req, res) => {
   // Rate limit: 5 attempts per IP per minute

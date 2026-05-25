@@ -10,20 +10,11 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
 const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
 
 // POST /checkout
-// x402 payment middleware runs before this handler — by the time we get here, USDC is settled
+// Validation, rate limiting, and x402 payment middleware all run before this handler.
+// By the time we get here: all fields are present, email/country are valid, rate limit
+// is not exceeded, and USDC payment is settled on Base.
 router.post('/', async (req, res) => {
   const { sku, name, email, address } = req.body || {};
-
-  // Validate required fields
-  if (!sku) return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
-  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
-    return res.status(400).json({
-      error: 'needs_address',
-      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
-      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
-      hint: 'Retry POST /checkout with all required fields. No payment is charged until all fields are present.',
-    });
-  }
 
   const product = getProduct(sku);
   if (!product) {
