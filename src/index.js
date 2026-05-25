@@ -83,18 +83,22 @@ app.post('/checkout', async (req, res, next) => {
   // Normalise to uppercase so "ca" works the same as "CA"
   address.country = address.country.toUpperCase();
 
-  // Rate limit: max 2 x402 orders per email per day — DB-backed, atomic, race-safe
-  try {
-    const count = await incrementX402RateLimit(email);
-    if (count > 2) {
-      return res.status(429).json({
-        error: 'rate_limit',
-        message: `${email} has already placed 2 orders today via x402. Try again tomorrow.`,
-        hint: 'Maximum 2 x402 orders per email per 24 hours. No payment was charged.',
-      });
+  // Rate limit: max X402_DAILY_LIMIT x402 orders per email per day (0 = disabled)
+  // Set X402_DAILY_LIMIT=0 in Railway to disable for demos
+  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
+  if (dailyLimit > 0) {
+    try {
+      const count = await incrementX402RateLimit(email);
+      if (count > dailyLimit) {
+        return res.status(429).json({
+          error: 'rate_limit',
+          message: `${email} has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
+          hint: `Maximum ${dailyLimit} x402 orders per email per 24 hours. No payment was charged.`,
+        });
+      }
+    } catch (err) {
+      console.error('[checkout] Rate limit DB error (non-fatal, allowing through):', err.message);
     }
-  } catch (err) {
-    console.error('[checkout] Rate limit DB error (non-fatal, allowing through):', err.message);
   }
 
   next();
