@@ -158,7 +158,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
             network,
             payTo: process.env.STORE_WALLET_ADDRESS,
           },
-          description: 'Buy the My Agent Bought Me This embroidered hat — $35 USDC on Base',
+          description: 'Buy the My Agent Bought Me This embroidered hat — $1.00 USDC on Base Sepolia (testnet)',
         },
       },
       resourceServer,
