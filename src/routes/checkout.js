@@ -3,9 +3,11 @@ const router = express.Router();
 const { getProduct, listSkus } = require('../lib/products');
 const { createOrder, incrementOrderCount } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
+const { sendOrderConfirmation } = require('../lib/email');
 
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
+const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
 
 // POST /checkout
 // x402 payment middleware runs before this handler — by the time we get here, USDC is settled
@@ -34,7 +36,21 @@ router.post('/', async (req, res) => {
     shopifyOrderId = await createShopifyOrder({ name, email, address, product, sku });
   } catch (err) {
     console.error('[checkout] Shopify order failed after x402 payment settled!', err.message);
-    // Payment is already taken — log for manual resolution
+    // Payment is already taken — alert store owner for manual resolution
+    try {
+      await sendOrderConfirmation({
+        to: ALERT_EMAIL,
+        subject: '🚨 x402 payment settled but Shopify order FAILED — manual action needed',
+        html: `<p><strong>URGENT:</strong> A customer paid via x402 but the Shopify order failed.</p>
+               <p><strong>Customer:</strong> ${name} &lt;${email}&gt;</p>
+               <p><strong>SKU:</strong> ${sku}</p>
+               <p><strong>Address:</strong> ${address.line1}, ${address.city}, ${address.state} ${address.postal_code}, ${address.country}</p>
+               <p><strong>Error:</strong> ${err.message}</p>
+               <p>Please create the order manually in Shopify and confirm with the customer.</p>`,
+      });
+    } catch (emailErr) {
+      console.error('[checkout] Failed to send alert email:', emailErr.message);
+    }
     return res.status(502).json({
       error: 'fulfillment_failed',
       message: 'Payment received but order creation failed. You will be contacted to resolve this.',

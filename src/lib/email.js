@@ -57,4 +57,13 @@ async function sendCardSetupEmail({ to, setupUrl }) {
   });
 }
 
-module.exports = { sendApiKeyEmail, sendCardSetupEmail };
+async function sendOrderConfirmation({ to, subject, html }) {
+  const t = getTransporter();
+  if (!t) {
+    console.warn('[email] Skipping alert — EMAIL_FROM/EMAIL_PASS not configured');
+    return;
+  }
+  await t.sendMail({ from: process.env.EMAIL_FROM, to, subject, html });
+}
+
+module.exports = { sendApiKeyEmail, sendCardSetupEmail, sendOrderConfirmation };
