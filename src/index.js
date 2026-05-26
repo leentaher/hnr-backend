@@ -108,11 +108,21 @@ app.post('/checkout', async (req, res, next) => {
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
 // Falls back gracefully if not configured (x402 disabled)
 if (process.env.STORE_WALLET_ADDRESS) {
+  // X402_ENV=testnet (default) | mainnet — single flag to switch between networks.
+  // Individual overrides: X402_NETWORK and X402_PRICE still take precedence if set explicitly.
+  const X402_ENV = (process.env.X402_ENV || 'testnet').toLowerCase();
+  const isMainnet = X402_ENV === 'mainnet';
+  console.log(`[x402] X402_ENV=${X402_ENV}`);
+
   // x402.org/facilitator is behind Cloudflare which blocks Railway's AWS IPs.
   // Default to the Vercel proxy which can reach x402.org reliably.
   // Override via X402_FACILITATOR_URL env var if needed.
   const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://test-inky-five-64.vercel.app/api/x402-proxy';
-  const network = process.env.X402_NETWORK || 'eip155:84532'; // Base Sepolia testnet by default
+  const network = process.env.X402_NETWORK || (isMainnet ? 'eip155:8453' : 'eip155:84532');
+  const x402Price = process.env.X402_PRICE || (isMainnet ? '$35.00' : '$1.00');
+  const x402Description = isMainnet
+    ? 'Buy the "My Agent Bought Me This" embroidered hat — $35.00 USDC on Base'
+    : 'Buy the "My Agent Bought Me This" embroidered hat — $1.00 USDC on Base Sepolia (testnet)';
 
   try {
     const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
@@ -193,16 +203,16 @@ if (process.env.STORE_WALLET_ADDRESS) {
         'POST /checkout': {
           accepts: {
             scheme: 'exact',
-            price: '$1.00',
+            price: x402Price,
             network,
             payTo: process.env.STORE_WALLET_ADDRESS,
           },
-          description: 'Buy the My Agent Bought Me This embroidered hat — $1.00 USDC on Base Sepolia (testnet)',
+          description: x402Description,
         },
       },
       resourceServer,
     ));
-    console.log(`[x402] Payment middleware active on POST /checkout (network: ${network})`);
+    console.log(`[x402] Payment middleware active on POST /checkout (network: ${network}, price: ${x402Price})`);
   } catch (err) {
     console.warn('[x402] Failed to initialize payment middleware (non-fatal):', err.message);
   }

@@ -16,6 +16,15 @@ import express from 'express';
 const BASE_URL = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
 const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
 
+// Mirrors X402_ENV logic from index.js so tool descriptions stay in sync
+const X402_ENV = (process.env.X402_ENV || 'testnet').toLowerCase();
+const isMainnet = X402_ENV === 'mainnet';
+const x402Price = process.env.X402_PRICE || (isMainnet ? '$35.00' : '$1.00');
+const x402NetworkLabel = isMainnet ? 'Base' : 'Base Sepolia (testnet)';
+const x402UsdcAddress = isMainnet
+  ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  // Base mainnet USDC
+  : '0x036CbD53842c5426634e7929541eC2318f3dCF7e'; // Base Sepolia USDC
+
 // Helper — handles non-JSON 402 bodies gracefully and captures x402 payment header
 async function api(path, { method = 'GET', body, apiKey } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -38,7 +47,7 @@ async function api(path, { method = 'GET', body, apiKey } = {}) {
 const STRIPE_DISABLED_MSG = {
   error: 'not_available',
   message: 'This store uses x402 USDC payments only. Use the buy_hat tool to purchase — no registration or api_key needed.',
-  hint: 'Call buy_hat with name, email, and address. Payment is $1.00 USDC on Base Sepolia (testnet).',
+  hint: `Call buy_hat with name, email, and address. Payment is ${x402Price} USDC on ${x402NetworkLabel}.`,
 };
 
 function createMcpServer() {
@@ -106,7 +115,7 @@ function createMcpServer() {
     'buy_hat',
     stripeEnabled
       ? 'Buy the My Agent Bought Me This hat in one step (Stripe flow). Registers the human if needed, then immediately places the order. Use a promo_code for a free hat — no card required.'
-      : 'Buy the My Agent Bought Me This hat via x402 USDC payment on Base. No registration needed — just provide shipping details. Payment of $1.00 USDC is required on Base Sepolia (testnet). This is the recommended tool to use when someone asks to buy a hat.',
+      : `Buy the My Agent Bought Me This hat via x402 USDC payment on ${x402NetworkLabel}. No registration needed — just provide shipping details. Payment of ${x402Price} USDC is required. This is the recommended tool to use when someone asks to buy a hat.`,
     {
       name: z.string().describe('Full name for the shipping label'),
       email: z.string().email().describe('Email for order confirmation and receipt'),
@@ -148,9 +157,10 @@ function createMcpServer() {
           }
           return { content: [{ type: 'text', text: JSON.stringify({
             payment_required: true,
-            message: 'Payment of $1.00 USDC on Base Sepolia is required. Use your wallet to sign an EIP-3009 transferWithAuthorization and retry POST /checkout with the X-Payment header.',
+            message: `Payment of ${x402Price} USDC on ${x402NetworkLabel} is required. Use your wallet to sign an EIP-3009 transferWithAuthorization and retry POST /checkout with the X-Payment header.`,
             checkout_endpoint: `${BASE_URL}/checkout`,
             checkout_body: { sku: 'hat-myagent-os', name, email, address },
+            usdc_contract: x402UsdcAddress,
             x402_payment_details: paymentDetails || checkoutRes.data,
           }, null, 2) }] };
         }
