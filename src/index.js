@@ -62,6 +62,20 @@ app.post('/checkout', async (req, res, next) => {
     });
   }
 
+  // Validate field lengths — prevents payment succeeding then Shopify rejecting oversized input
+  const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
+  for (const [field, max] of Object.entries(fieldLimits)) {
+    const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
+    if (val && val.length > max) {
+      return res.status(400).json({
+        error: 'field_too_long',
+        field,
+        max_length: max,
+        message: `"${field}" exceeds maximum length of ${max} characters. No payment is charged.`,
+      });
+    }
+  }
+
   // Validate email format — catches bad emails before agent is charged
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
