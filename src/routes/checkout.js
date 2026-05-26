@@ -5,6 +5,16 @@ const { createOrder, incrementOrderCount } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { sendOrderConfirmation } = require('../lib/email');
 
+// Minimal HTML escaper — prevents injected HTML/script in alert emails sent to store owner
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
 const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
@@ -33,10 +43,10 @@ router.post('/', async (req, res) => {
         to: ALERT_EMAIL,
         subject: '🚨 x402 payment settled but Shopify order FAILED — manual action needed',
         html: `<p><strong>URGENT:</strong> A customer paid via x402 but the Shopify order failed.</p>
-               <p><strong>Customer:</strong> ${name} &lt;${email}&gt;</p>
-               <p><strong>SKU:</strong> ${sku}</p>
-               <p><strong>Address:</strong> ${address.line1}, ${address.city}, ${address.state} ${address.postal_code}, ${address.country}</p>
-               <p><strong>Error:</strong> ${err.message}</p>
+               <p><strong>Customer:</strong> ${esc(name)} &lt;${esc(email)}&gt;</p>
+               <p><strong>SKU:</strong> ${esc(sku)}</p>
+               <p><strong>Address:</strong> ${esc(address.line1)}, ${esc(address.city)}, ${esc(address.state)} ${esc(address.postal_code)}, ${esc(address.country)}</p>
+               <p><strong>Error:</strong> ${esc(err.message)}</p>
                <p>Please create the order manually in Shopify and confirm with the customer.</p>`,
       });
     } catch (emailErr) {
@@ -120,7 +130,8 @@ async function createShopifyOrder({ name, email, address, product, sku }) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Shopify ${response.status}: ${text}`);
+    console.error('[checkout] Shopify API error:', response.status, text); // full detail in server logs only
+    throw new Error(`Shopify order creation failed (${response.status})`); // sanitized for callers
   }
 
   const data = await response.json();

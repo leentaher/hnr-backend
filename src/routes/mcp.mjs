@@ -206,26 +206,51 @@ function createMcpServer() {
   return server;
 }
 
+const MCP_MAX_SESSIONS = 200;          // hard cap — prevents memory DoS
+const MCP_SESSION_TTL_MS = 30 * 60_000; // 30 min idle TTL for abandoned sessions
+
 export function createMcpRouter() {
   const router = express.Router();
   const transports = {};
+  const sessionTimestamps = {}; // tracks last-activity time per session
+
+  // Prune abandoned sessions that haven't been explicitly closed
+  setInterval(() => {
+    const cutoff = Date.now() - MCP_SESSION_TTL_MS;
+    for (const [id, ts] of Object.entries(sessionTimestamps)) {
+      if (ts < cutoff) {
+        delete transports[id];
+        delete sessionTimestamps[id];
+      }
+    }
+  }, 5 * 60_000).unref();
 
   router.post('/', async (req, res) => {
     try {
       const sessionId = req.headers['mcp-session-id'];
 
       if (sessionId && transports[sessionId]) {
+        sessionTimestamps[sessionId] = Date.now(); // refresh TTL on activity
         await transports[sessionId].handleRequest(req, res, req.body);
         return;
       }
 
       if (!sessionId && isInitializeRequest(req.body)) {
+        if (Object.keys(transports).length >= MCP_MAX_SESSIONS) {
+          return res.status(503).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Server at session capacity, try again later' }, id: null });
+        }
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => { transports[id] = transport; },
+          onsessioninitialized: (id) => {
+            transports[id] = transport;
+            sessionTimestamps[id] = Date.now();
+          },
         });
         transport.onclose = () => {
-          if (transport.sessionId) delete transports[transport.sessionId];
+          if (transport.sessionId) {
+            delete transports[transport.sessionId];
+            delete sessionTimestamps[transport.sessionId];
+          }
         };
         const server = createMcpServer();
         await server.connect(transport);

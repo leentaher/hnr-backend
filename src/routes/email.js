@@ -75,7 +75,20 @@ function buildEmailHtml({ firstName, orderName, city, country, totalPrice }) {
 }
 
 // POST /email/resend/:orderId
+// Protected by ADMIN_SECRET env var — only the store owner can trigger resends.
+// This prevents unauthenticated enumeration of customer emails via sequential Shopify order IDs.
 router.post('/resend/:orderId', async (req, res) => {
+  // Require admin secret header
+  const adminSecret = process.env.ADMIN_SECRET;
+  if (adminSecret) {
+    const provided = (req.headers['x-admin-secret'] || '').trim();
+    if (!provided || provided !== adminSecret) {
+      return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid X-Admin-Secret header.' });
+    }
+  } else {
+    console.warn('[email/resend] ADMIN_SECRET not set — endpoint is unauthenticated. Set ADMIN_SECRET in Railway.');
+  }
+
   const ip = req.ip;
   const now = Date.now();
   const attempts = (emailResendAttempts.get(ip) || []).filter(t => now - t < 60_000);
@@ -85,6 +98,11 @@ router.post('/resend/:orderId', async (req, res) => {
   emailResendAttempts.set(ip, [...attempts, now]);
 
   const { orderId } = req.params;
+
+  // Shopify order IDs are numeric — reject anything else to prevent path traversal / probing
+  if (!/^\d{1,20}$/.test(orderId)) {
+    return res.status(400).json({ error: 'invalid_order_id', message: 'Order ID must be numeric.' });
+  }
 
   const domain = process.env.SHOPIFY_STORE_DOMAIN;
   const shopifyToken = process.env.SHOPIFY_ADMIN_API_KEY;

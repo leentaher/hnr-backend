@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const Stripe = require('stripe');
-const NodeCache = require('node-cache');
+const helmet = require('helmet');
 
 // Catch unhandled rejections so Railway logs show the real error instead of just crashing
 process.on('unhandledRejection', (reason, promise) => {
@@ -18,13 +18,46 @@ const emailRouter = require('./routes/email');
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+// Validate wallet address at startup before accepting any payments
+if (process.env.STORE_WALLET_ADDRESS && !/^0x[0-9a-fA-F]{40}$/.test(process.env.STORE_WALLET_ADDRESS)) {
+  console.error('[startup] STORE_WALLET_ADDRESS is not a valid Ethereum address — aborting to prevent lost payments');
+  process.exit(1);
+}
+
 const app = express();
 app.set('trust proxy', 1); // Railway / reverse-proxy: trust X-Forwarded-For for real client IP
 
+// Security headers — Helmet sets X-Content-Type-Options, X-Frame-Options, HSTS,
+// Referrer-Policy, X-XSS-Protection, X-DNS-Prefetch-Control, Permissions-Policy.
+// CSP and COEP disabled globally (API — no scripts/resources to restrict).
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Tighten headers on the two HTML pages where a browser loads a real page
+app.use(['/setup-complete', '/setup-cancel'], (req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+  next();
+});
+
+// CORS — restrict to configured origins (defaults to APP_URL for the setup flow).
+// For a pure agent API no browser clients need CORS at all; this keeps the setup
+// page working while blocking arbitrary third-party origins from reading responses.
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || process.env.APP_URL || '')
+    .split(',').map(o => o.trim()).filter(Boolean)
+);
+
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.size === 0 || allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, Payment-Signature');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, Payment-Signature, MCP-Session-Id');
+  // Only expose payment headers — not a blanket wildcard
   res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response, Payment-Required');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -96,22 +129,31 @@ app.post('/checkout', async (req, res, next) => {
   }
   // Normalise to uppercase so "ca" works the same as "CA"
   address.country = address.country.toUpperCase();
+  // Normalise email to lowercase — prevents case-variant bypass of per-email rate limit
+  // and ensures a single Shopify customer record per address
+  req.body.email = email.toLowerCase();
+  const normEmail = req.body.email;
 
   // Rate limit: max X402_DAILY_LIMIT x402 orders per email per day (0 = disabled)
   // Set X402_DAILY_LIMIT=0 in Railway to disable for demos
   const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
   if (dailyLimit > 0) {
     try {
-      const count = await incrementX402RateLimit(email);
+      const count = await incrementX402RateLimit(normEmail);
       if (count > dailyLimit) {
         return res.status(429).json({
           error: 'rate_limit',
-          message: `${email} has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
+          message: `This email has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
           hint: `Maximum ${dailyLimit} x402 orders per email per 24 hours. No payment was charged.`,
         });
       }
     } catch (err) {
-      console.error('[checkout] Rate limit DB error (non-fatal, allowing through):', err.message);
+      // DB error — block the request rather than silently bypassing the rate limit
+      console.error('[checkout] Rate limit DB error — blocking request:', err.message);
+      return res.status(503).json({
+        error: 'service_unavailable',
+        message: 'Unable to verify rate limit. Please try again in a moment. No payment was charged.',
+      });
     }
   }
 
@@ -333,13 +375,26 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.use((req, res) => res.status(404).json({ error: 'not_found' }));
 
 // Global error handler — propagate HTTP status from middleware errors (e.g. 413 from body-size limit)
+// Safe messages only — never forward raw err.message to callers (may leak internals)
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
+  console.error('[unhandled]', err);
   if (status >= 500) {
-    console.error('[unhandled]', err);
     return res.status(status).json({ error: 'internal_error', message: 'Something went wrong. Please try again.' });
   }
-  res.status(status).json({ error: err.type || 'internal_error', message: err.message });
+  // Map common middleware statuses to safe messages
+  const safeMessages = {
+    400: 'Bad request',
+    401: err.message || 'Unauthorized',
+    402: err.message || 'Payment required',
+    403: 'Forbidden',
+    404: 'Not found',
+    405: 'Method not allowed',
+    413: 'Request body too large (max 10kb)',
+    429: err.message || 'Too many requests',
+  };
+  const message = safeMessages[status] || 'Request error';
+  res.status(status).json({ error: err.type || 'request_error', message });
 });
 
 const PORT = process.env.PORT || 3000;

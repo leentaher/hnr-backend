@@ -51,6 +51,12 @@ router.post('/', auth, async (req, res) => {
     return res.status(429).json({ error: 'daily_limit_reached', message: `Max ${DAILY_ORDER_LIMIT} orders per day.`, resets_at: 'midnight UTC' });
   }
 
+  // Generate orderId up front — used as the Stripe idempotency key so each request
+  // is guaranteed unique, even under concurrent calls for the same customer.
+  // This prevents the race condition where two concurrent requests read the same
+  // ordersToday value and generate a colliding idempotency key.
+  const orderId = generateOrderId();
+
   // 1. Payment — skip Stripe if customer has a free order remaining
   let paymentIntentId = null;
   const isFreeOrder = customer.free_orders_remaining > 0;
@@ -64,7 +70,7 @@ router.post('/', auth, async (req, res) => {
       }
       paymentMethodId = pms.data[0].id;
     } catch (err) {
-      return res.status(502).json({ error: 'stripe_error', message: err.message });
+      return res.status(502).json({ error: 'stripe_error', message: 'Unable to retrieve payment method.' });
     }
 
     let paymentIntent;
@@ -78,10 +84,13 @@ router.post('/', auth, async (req, res) => {
         confirm: true,
         description: `${product.label} (${sku}) — Human Not Required`,
       }, {
-        idempotencyKey: `${req.apiKey}-${sku}-${today}-${ordersToday}`,
+        // Use the pre-generated orderId as idempotency key — guaranteed unique per request,
+        // no race condition possible unlike the previous ordersToday-based approach.
+        idempotencyKey: orderId,
       });
     } catch (err) {
-      return res.status(402).json({ error: 'payment_failed', reason: err.decline_code || err.code || 'unknown', message: err.message });
+      console.error('[orders] Stripe payment failed:', err.message);
+      return res.status(402).json({ error: 'payment_failed', reason: err.decline_code || err.code || 'unknown' });
     }
 
     if (paymentIntent.status !== 'succeeded') {
@@ -103,7 +112,7 @@ router.post('/', auth, async (req, res) => {
   }
 
   // 4. Save order, update counts
-  const orderId = generateOrderId();
+  // orderId was already generated above before the Stripe call
   await createOrder({ orderId, apiKey: req.apiKey, sku, stripePaymentIntentId: paymentIntentId, shopifyOrderId });
   await incrementOrderCount(req.apiKey);
   if (isFreeOrder) await decrementFreeOrder(req.apiKey);
@@ -166,7 +175,8 @@ async function createShopifyOrder({ customer, product, sku, paymentIntentId }) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Shopify ${response.status}: ${text}`);
+    console.error('[orders] Shopify API error:', response.status, text); // full detail in server logs only
+    throw new Error(`Shopify order creation failed (${response.status})`); // sanitized for callers
   }
 
   const data = await response.json();

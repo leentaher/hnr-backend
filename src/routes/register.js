@@ -48,6 +48,15 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'missing_field', field: 'address', message: 'address.line1, city, state, postal_code, and country are required.' });
   }
 
+  // Field length limits — match checkout validation, prevents oversized payloads reaching Stripe/DB
+  const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
+  for (const [field, max] of Object.entries(fieldLimits)) {
+    const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
+    if (val && val.length > max) {
+      return res.status(400).json({ error: 'field_too_long', field, max_length: max });
+    }
+  }
+
   // Validate promo code if provided
   let freeOrders = 0;
   if (promo_code) {
