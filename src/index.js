@@ -113,7 +113,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const facilitatorConfig = { url: facilitatorUrl };
     if (cdpKeyName && cdpSecret) {
       facilitatorConfig.createAuthHeaders = async () => {
-        const headers = { Authorization: `Bearer ${cdpKeyName}:${cdpSecret}` };
+        const headers = { Authorization: `Bearer ${cdpSecret}` };
         return { verify: headers, settle: headers, supported: headers };
       };
       console.log('[x402] CDP auth configured');
