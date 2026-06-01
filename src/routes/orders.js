@@ -116,10 +116,26 @@ router.post('/', auth, async (req, res) => {
   }
 
   // 4. Save order, update counts
-  // orderId was already generated above before the Stripe call
-  await createOrder({ orderId, apiKey: req.apiKey, sku, stripePaymentIntentId: paymentIntentId, shopifyOrderId });
-  await incrementOrderCount(req.apiKey);
-  if (isFreeOrder) await decrementFreeOrder(req.apiKey);
+  // Shopify order is already created — these DB writes are post-payment bookkeeping.
+  // Failures here are non-fatal from the customer's POV (hat is still shipping)
+  // but we log loudly so they can be reconciled manually.
+  try {
+    await createOrder({ orderId, apiKey: req.apiKey, sku, stripePaymentIntentId: paymentIntentId, shopifyOrderId });
+  } catch (err) {
+    // Duplicate orderId is harmless (idempotent retry) — anything else needs attention
+    if (!err.message?.includes('duplicate') && err.code !== '23505') {
+      console.error('[orders] ALERT: createOrder failed after Shopify success! Manual reconciliation needed.', {
+        orderId, sku, shopifyOrderId, paymentIntentId, error: err.message,
+      });
+    }
+  }
+  try {
+    await incrementOrderCount(req.apiKey);
+    if (isFreeOrder) await decrementFreeOrder(req.apiKey);
+  } catch (err) {
+    // Non-fatal — daily limit may be inaccurate for this customer until next boot
+    console.error('[orders] Failed to update order counts (non-fatal):', err.message);
+  }
 
   res.status(201).json({
     order_id: orderId,

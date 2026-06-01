@@ -54,17 +54,25 @@ async function initDb() {
     await pool.query(`ALTER TABLE used_promos ADD PRIMARY KEY (code, email)`);
     console.log('[db] Migrated used_promos to composite PK (code, email)');
   } catch (err) {
-    // Likely already has composite PK — safe to ignore
-    console.log('[db] used_promos PK already migrated or skipped:', err.message);
+    // 42P16 = invalid_table_definition (already has this PK) — safe to ignore.
+    // Any other code is a genuine migration failure worth surfacing.
+    if (err.code === '42P16' || err.message?.includes('already exists')) {
+      console.log('[db] used_promos composite PK already present — skipping');
+    } else {
+      console.error('[db] WARN: used_promos PK migration failed unexpectedly:', err.message, err.code);
+    }
   }
 
   // Migration: hash any plain-text api_keys still in the DB.
   // Plain keys start with 'sk_agent_'; SHA-256 hashes are 64 hex chars and never match that prefix.
-  // Idempotent — safe to run on every startup.
-  const { rowCount } = await pool.query(`
+  // Short-circuit with a cheap COUNT first to avoid a table scan on every startup once migrated.
+  const { rows: [{ count: plainCount }] } = await pool.query(
+    `SELECT COUNT(*) FROM customers WHERE api_key LIKE 'sk_agent_%'`
+  );
+  const { rowCount } = plainCount > 0 ? await pool.query(`
     UPDATE customers SET api_key = encode(sha256(api_key::bytea), 'hex')
     WHERE api_key LIKE 'sk_agent_%'
-  `);
+  `) : { rowCount: 0 };
   if (rowCount > 0) {
     await pool.query(`
       UPDATE orders SET api_key = encode(sha256(api_key::bytea), 'hex')
@@ -140,8 +148,20 @@ async function getOrder(orderId) {
   return r.rows[0] || null;
 }
 
-// x402 rate limit — atomically increments counter, returns new count
-// PostgreSQL handles concurrent requests safely via its transaction model
+// x402 rate limit — read-only check, returns current count without incrementing.
+// Use this BEFORE payment fires so failed payments don't consume the daily quota.
+async function getX402RateLimit(email) {
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await pool.query(
+    'SELECT count FROM x402_rate_limit WHERE email = $1 AND date = $2',
+    [email.toLowerCase(), today]
+  );
+  return r.rows[0]?.count ?? 0;
+}
+
+// x402 rate limit — atomically increments counter, returns new count.
+// Call this AFTER payment settles (inside the checkout handler) so failed
+// payments don't consume the daily quota.
 async function incrementX402RateLimit(email) {
   const today = new Date().toISOString().slice(0, 10);
   const r = await pool.query(`
@@ -154,4 +174,4 @@ async function incrementX402RateLimit(email) {
   return r.rows[0].count; // new count after increment
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, incrementX402RateLimit };
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };

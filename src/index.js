@@ -9,7 +9,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[unhandledRejection]', reason);
 });
 
-const { initDb, getCustomerByEmail, incrementX402RateLimit } = require('./lib/db');
+const { initDb, getCustomerByEmail, getX402RateLimit } = require('./lib/db');
 const { getProduct } = require('./lib/products');
 const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
@@ -137,13 +137,14 @@ app.post('/checkout', async (req, res, next) => {
   req.body.email = email.toLowerCase();
   const normEmail = req.body.email;
 
-  // Rate limit: max X402_DAILY_LIMIT x402 orders per email per day (0 = disabled)
-  // Set X402_DAILY_LIMIT=0 in Railway to disable for demos
+  // Rate limit pre-flight: check current count WITHOUT incrementing.
+  // The increment happens inside checkout.js AFTER payment settles, so
+  // failed payments (insufficient funds, wallet rejection) don't consume quota.
   const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
   if (dailyLimit > 0) {
     try {
-      const count = await incrementX402RateLimit(normEmail);
-      if (count > dailyLimit) {
+      const count = await getX402RateLimit(normEmail);
+      if (count >= dailyLimit) {
         return res.status(429).json({
           error: 'rate_limit',
           message: `This email has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,

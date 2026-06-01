@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getProduct } = require('../lib/products');
-const { createOrder } = require('../lib/db');
+const { createOrder, incrementX402RateLimit } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { sendOrderConfirmation } = require('../lib/email');
 
@@ -71,6 +71,16 @@ router.post('/', async (req, res) => {
     });
   } catch (err) {
     console.warn('[checkout] Failed to save order record (non-fatal):', err.message);
+  }
+
+  // Increment rate limit counter NOW — after payment settled and order created.
+  // Pre-flight only checked the count; incrementing here means failed payments
+  // don't consume the customer's daily quota.
+  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
+  if (dailyLimit > 0) {
+    incrementX402RateLimit(email).catch(err =>
+      console.warn('[checkout] Failed to increment rate limit counter (non-fatal):', err.message)
+    );
   }
 
   res.status(201).json({

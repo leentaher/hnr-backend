@@ -3,7 +3,23 @@ const router = express.Router();
 
 const emailResendAttempts = new Map();
 
+// Escape HTML entities — prevents XSS if Shopify returns HTML in any order field
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 function buildEmailHtml({ firstName, orderName, city, country, totalPrice }) {
+  // Escape all Shopify-sourced values before interpolating into HTML
+  firstName = esc(firstName);
+  orderName = esc(orderName);
+  city = esc(city);
+  country = esc(country);
+  totalPrice = esc(totalPrice);
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
@@ -121,7 +137,8 @@ router.post('/resend/:orderId', async (req, res) => {
     const data = await r.json();
     order = data.order;
   } catch (err) {
-    return res.status(502).json({ error: 'shopify_error', message: err.message });
+    console.error('[email/resend] Shopify fetch error:', err.message);
+    return res.status(502).json({ error: 'shopify_error', message: 'Failed to fetch order from Shopify.' });
   }
 
   const email = order.email || order.contact_email;

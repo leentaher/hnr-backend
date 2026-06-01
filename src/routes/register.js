@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+// Guard Stripe init — throws on boot when STRIPE_SECRET_KEY is unset (same fix as orders.js)
+const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
+const stripe = stripeEnabled ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const { getCustomerByEmail, createCustomer, isPromoUsed, markPromoUsed } = require('../lib/db');
 const { generateApiKey } = require('../lib/keys');
 const { sendApiKeyEmail, sendCardSetupEmail } = require('../lib/email');
