@@ -77,92 +77,6 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
-// Pre-validate POST /checkout before x402 fires — agent never gets charged for a missing-field request
-app.post('/checkout', async (req, res, next) => {
-  const { sku, name, email, address } = req.body || {};
-
-  if (!sku) {
-    return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
-  }
-
-  if (!getProduct(sku)) {
-    return res.status(400).json({ error: 'invalid_sku', message: `SKU "${sku}" not found`, hint: 'GET /orders/skus to see available products' });
-  }
-
-  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
-    return res.status(400).json({
-      error: 'needs_address',
-      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
-      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
-      hint: 'Retry POST /checkout with all required fields. No payment is charged until all fields are present.',
-    });
-  }
-
-  // Validate field lengths — prevents payment succeeding then Shopify rejecting oversized input
-  const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
-  for (const [field, max] of Object.entries(fieldLimits)) {
-    const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
-    if (val && val.length > max) {
-      return res.status(400).json({
-        error: 'field_too_long',
-        field,
-        max_length: max,
-        message: `"${field}" exceeds maximum length of ${max} characters. No payment is charged.`,
-      });
-    }
-  }
-
-  // Validate email format — catches bad emails before agent is charged
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.status(400).json({
-      error: 'invalid_email',
-      message: `"${email}" is not a valid email address`,
-      hint: 'Provide a valid email address (e.g. name@example.com). No payment is charged.',
-    });
-  }
-
-  // Validate country is a 2-letter ISO code — catches "Canada" instead of "CA"
-  if (!/^[A-Z]{2}$/.test(address.country.toUpperCase())) {
-    return res.status(400).json({
-      error: 'invalid_country',
-      message: `"${address.country}" is not a valid ISO country code`,
-      hint: 'Use a 2-letter ISO country code e.g. US, CA, GB, AU. No payment is charged.',
-    });
-  }
-  // Normalise to uppercase so "ca" works the same as "CA"
-  address.country = address.country.toUpperCase();
-  // Normalise email to lowercase — prevents case-variant bypass of per-email rate limit
-  // and ensures a single Shopify customer record per address
-  req.body.email = email.toLowerCase();
-  const normEmail = req.body.email;
-
-  // Rate limit pre-flight: check current count WITHOUT incrementing.
-  // The increment happens inside checkout.js AFTER payment settles, so
-  // failed payments (insufficient funds, wallet rejection) don't consume quota.
-  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
-  if (dailyLimit > 0) {
-    try {
-      const count = await getX402RateLimit(normEmail);
-      if (count >= dailyLimit) {
-        return res.status(429).json({
-          error: 'rate_limit',
-          message: `This email has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
-          hint: `Maximum ${dailyLimit} x402 orders per email per 24 hours. No payment was charged.`,
-        });
-      }
-    } catch (err) {
-      // DB error — block the request rather than silently bypassing the rate limit
-      console.error('[checkout] Rate limit DB error — blocking request:', err.message);
-      return res.status(503).json({
-        error: 'service_unavailable',
-        message: 'Unable to verify rate limit. Please try again in a moment. No payment was charged.',
-      });
-    }
-  }
-
-  next();
-});
 
 // x402 payment middleware — protects POST /checkout with USDC on Base
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
@@ -188,6 +102,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
     const { HTTPFacilitatorClient } = require('@x402/core/server');
     const { ExactEvmScheme } = require('@x402/evm/exact/server');
+    const { bazaarResourceServerExtension, declareDiscoveryExtension } = require('@x402/extensions');
     const crypto = require('crypto');
 
     // Build a CDP JWT for the given sub-path (verify / settle / supported)
@@ -256,7 +171,8 @@ if (process.env.STORE_WALLET_ADDRESS) {
 
     const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
     const resourceServer = new x402ResourceServer(facilitatorClient)
-      .register(network, new ExactEvmScheme());
+      .register(network, new ExactEvmScheme())
+      .extend(bazaarResourceServerExtension); // registers this endpoint in CDP Bazaar discovery
 
     app.use(paymentMiddleware(
       {
@@ -268,6 +184,39 @@ if (process.env.STORE_WALLET_ADDRESS) {
             payTo: process.env.STORE_WALLET_ADDRESS,
           },
           description: x402Description,
+          // Bazaar discovery metadata — produces the rich card in CDP Bazaar search
+          extensions: declareDiscoveryExtension({
+            discoverable: true,
+            name: 'Humans Not Required — Agent Hat Store',
+            description: 'Buy the "My Agent Bought Me This" embroidered hat. Agents pay directly with USDC on Base — no human needed.',
+            bodyType: 'json',
+            input: {
+              sku: { type: 'string', description: 'Product SKU. Use "hat-myagent-os" for the embroidered hat.' },
+              name: { type: 'string', description: 'Full name of the recipient for shipping.' },
+              email: { type: 'string', description: 'Email address for the order confirmation receipt.' },
+              address: {
+                type: 'object',
+                description: 'Shipping address.',
+                properties: {
+                  line1: { type: 'string', description: 'Street address line 1.' },
+                  line2: { type: 'string', description: 'Street address line 2 (optional).' },
+                  city: { type: 'string', description: 'City.' },
+                  state: { type: 'string', description: 'State or province.' },
+                  postal_code: { type: 'string', description: 'ZIP or postal code.' },
+                  country: { type: 'string', description: 'ISO 2-letter country code, e.g. US, CA, GB.' },
+                },
+              },
+            },
+            output: {
+              example: {
+                order_id: 'ORD-abc123',
+                status: 'placed',
+                sku: 'hat-myagent-os',
+                payment: 'x402_usdc_base',
+                message: 'Payment settled on Base. Your hat is on the way.',
+              },
+            },
+          }),
         },
       },
       resourceServer,
@@ -279,6 +228,85 @@ if (process.env.STORE_WALLET_ADDRESS) {
 } else {
   console.warn('[x402] STORE_WALLET_ADDRESS not set — x402 checkout disabled');
 }
+
+// Validate POST /checkout fields AFTER x402 fires — unpaid requests get a clean 402 first,
+// field validation only runs once payment is confirmed.
+app.post('/checkout', async (req, res, next) => {
+  const { sku, name, email, address } = req.body || {};
+
+  if (!sku) {
+    return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
+  }
+
+  if (!getProduct(sku)) {
+    return res.status(400).json({ error: 'invalid_sku', message: `SKU "${sku}" not found`, hint: 'GET /orders/skus to see available products' });
+  }
+
+  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
+    return res.status(400).json({
+      error: 'needs_address',
+      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
+      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
+      hint: 'Retry POST /checkout with all required fields.',
+    });
+  }
+
+  const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
+  for (const [field, max] of Object.entries(fieldLimits)) {
+    const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
+    if (val && val.length > max) {
+      return res.status(400).json({
+        error: 'field_too_long',
+        field,
+        max_length: max,
+        message: `"${field}" exceeds maximum length of ${max} characters.`,
+      });
+    }
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({
+      error: 'invalid_email',
+      message: `"${email}" is not a valid email address`,
+      hint: 'Provide a valid email address (e.g. name@example.com).',
+    });
+  }
+
+  if (!/^[A-Z]{2}$/.test(address.country.toUpperCase())) {
+    return res.status(400).json({
+      error: 'invalid_country',
+      message: `"${address.country}" is not a valid ISO country code`,
+      hint: 'Use a 2-letter ISO country code e.g. US, CA, GB, AU.',
+    });
+  }
+
+  address.country = address.country.toUpperCase();
+  req.body.email = email.toLowerCase();
+  const normEmail = req.body.email;
+
+  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
+  if (dailyLimit > 0) {
+    try {
+      const count = await getX402RateLimit(normEmail);
+      if (count >= dailyLimit) {
+        return res.status(429).json({
+          error: 'rate_limit',
+          message: `This email has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
+          hint: `Maximum ${dailyLimit} x402 orders per email per 24 hours.`,
+        });
+      }
+    } catch (err) {
+      console.error('[checkout] Rate limit DB error — blocking request:', err.message);
+      return res.status(503).json({
+        error: 'service_unavailable',
+        message: 'Unable to verify rate limit. Please try again in a moment.',
+      });
+    }
+  }
+
+  next();
+});
 
 // Routes
 // x402 flow — always enabled
