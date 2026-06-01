@@ -111,8 +111,13 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const cdpKeyName = process.env.CDP_API_KEY_NAME;
     if (cdpKeyName && process.env.CDP_API_KEY_PRIVATE_KEY) {
       try {
-        const rawPem = process.env.CDP_API_KEY_PRIVATE_KEY.replace(/\\n/g, '\n');
-        cdpKeyObject = crypto.createPrivateKey({ key: rawPem, format: 'pem' });
+        let keyInput = process.env.CDP_API_KEY_PRIVATE_KEY.replace(/\\n/g, '\n').trim();
+        // CDP dashboard exports the raw base64 key without PEM headers.
+        // Wrap it if it looks like a bare base64 string (no -----BEGIN line).
+        if (!keyInput.startsWith('-----')) {
+          keyInput = `-----BEGIN EC PRIVATE KEY-----\n${keyInput}\n-----END EC PRIVATE KEY-----`;
+        }
+        cdpKeyObject = crypto.createPrivateKey({ key: keyInput, format: 'pem' });
         console.log('[x402] CDP private key loaded OK');
       } catch (err) {
         console.error('[x402] Failed to parse CDP private key:', err.message);
