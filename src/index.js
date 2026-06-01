@@ -105,69 +105,16 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const { declareDiscoveryExtension } = require('@x402/extensions');
     const crypto = require('crypto');
 
-    // Build a CDP JWT for the given sub-path (verify / settle / supported)
-    // Parses the PEM at startup once so sign errors surface immediately in logs
-    let cdpKeyObject = null;
+    // CDP Secret API keys use simple Bearer token auth (Key ID + Secret),
+    // not the JWT/EC signing approach. Pass the secret directly.
     const cdpKeyName = process.env.CDP_API_KEY_NAME;
-    if (cdpKeyName && process.env.CDP_API_KEY_PRIVATE_KEY) {
-      try {
-        let keyInput = process.env.CDP_API_KEY_PRIVATE_KEY.replace(/\\n/g, '\n').trim();
-        // CDP dashboard exports the raw base64 key without PEM headers.
-        // Wrap it if it looks like a bare base64 string (no -----BEGIN line).
-        if (!keyInput.startsWith('-----')) {
-          keyInput = `-----BEGIN EC PRIVATE KEY-----\n${keyInput}\n-----END EC PRIVATE KEY-----`;
-        }
-        cdpKeyObject = crypto.createPrivateKey({ key: keyInput, format: 'pem' });
-        console.log('[x402] CDP private key loaded OK');
-      } catch (err) {
-        console.error('[x402] Failed to parse CDP private key:', err.message);
-      }
-    }
-
-    function buildCdpJwt(path) {
-      if (!cdpKeyObject || !cdpKeyName) return null;
-      try {
-        const now = Math.floor(Date.now() / 1000);
-        const nonce = crypto.randomBytes(16).toString('hex');
-        const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: cdpKeyName })).toString('base64url');
-        const payload = Buffer.from(JSON.stringify({
-          sub: cdpKeyName, iss: 'cdp', nbf: now, exp: now + 120, nonce,
-          uri: `POST api.cdp.coinbase.com/platform/v2/x402/${path}`,
-        })).toString('base64url');
-
-        const signingInput = `${header}.${payload}`;
-        const sign = crypto.createSign('SHA256');
-        sign.update(signingInput);
-        const der = sign.sign(cdpKeyObject);
-
-        // Convert DER-encoded EC signature to raw r||s (required by JWT ES256)
-        let offset = 2;
-        if (der[1] === 0x81) offset = 3;
-        offset++;
-        const rLen = der[offset++];
-        let r = der.slice(offset, offset + rLen); offset += rLen;
-        offset++;
-        const sLen = der[offset++];
-        let s = der.slice(offset, offset + sLen);
-        if (r[0] === 0) r = r.slice(1);
-        if (s[0] === 0) s = s.slice(1);
-        const sig = Buffer.concat([Buffer.alloc(32 - r.length), r, Buffer.alloc(32 - s.length), s]).toString('base64url');
-
-        return `${signingInput}.${sig}`;
-      } catch (err) {
-        console.error('[x402] CDP JWT signing failed:', err.message);
-        return null;
-      }
-    }
+    const cdpSecret = process.env.CDP_API_KEY_PRIVATE_KEY;
 
     const facilitatorConfig = { url: facilitatorUrl };
-    if (process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY) {
+    if (cdpKeyName && cdpSecret) {
       facilitatorConfig.createAuthHeaders = async () => {
-        const authFor = (path) => {
-          const token = buildCdpJwt(path);
-          return token ? { Authorization: `Bearer ${token}` } : {};
-        };
-        return { verify: authFor('verify'), settle: authFor('settle'), supported: authFor('supported') };
+        const headers = { Authorization: `Bearer ${cdpKeyName}:${cdpSecret}` };
+        return { verify: headers, settle: headers, supported: headers };
       };
       console.log('[x402] CDP auth configured');
     } else {
