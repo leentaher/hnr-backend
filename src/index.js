@@ -102,7 +102,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const { paymentMiddleware, x402ResourceServer } = require('@x402/express');
     const { HTTPFacilitatorClient } = require('@x402/core/server');
     const { ExactEvmScheme } = require('@x402/evm/exact/server');
-    const { bazaarResourceServerExtension, declareDiscoveryExtension } = require('@x402/extensions');
+    const { declareDiscoveryExtension } = require('@x402/extensions');
     const crypto = require('crypto');
 
     // Build a CDP JWT for the given sub-path (verify / settle / supported)
@@ -171,8 +171,9 @@ if (process.env.STORE_WALLET_ADDRESS) {
 
     const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
     const resourceServer = new x402ResourceServer(facilitatorClient)
-      .register(network, new ExactEvmScheme())
-      .extend(bazaarResourceServerExtension); // registers this endpoint in CDP Bazaar discovery
+      .register(network, new ExactEvmScheme());
+    // Bazaar extension is auto-registered by paymentMiddleware when it detects
+    // declareDiscoveryExtension metadata in the route config below
 
     app.use(paymentMiddleware(
       {
