@@ -16,7 +16,10 @@ const ordersRouter = require('./routes/orders');
 const checkoutRouter = require('./routes/checkout');
 const emailRouter = require('./routes/email');
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+// Stripe client — only instantiated when Stripe is enabled.
+// Instantiating with undefined throws in Stripe SDK v14+, so guard it here.
+const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
+const stripe = stripeEnabled ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 // Validate wallet address at startup before accepting any payments
 if (process.env.STORE_WALLET_ADDRESS && !/^0x[0-9a-fA-F]{40}$/.test(process.env.STORE_WALLET_ADDRESS)) {
@@ -280,22 +283,17 @@ if (process.env.STORE_WALLET_ADDRESS) {
 // x402 flow — always enabled
 app.use('/checkout', checkoutRouter);
 
-// Stripe flow — disabled when ENABLE_STRIPE=false (case-insensitive)
-const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
 console.log(`[stripe] ENABLE_STRIPE="${process.env.ENABLE_STRIPE}" → stripeEnabled=${stripeEnabled}`);
+// GET /orders/skus is always available regardless of Stripe flag
+// ordersRouter handles its own 404s for Stripe-only endpoints when stripeEnabled=false
+app.use('/orders', ordersRouter);
+
 if (stripeEnabled) {
   app.use('/register', registerRouter);
-  app.use('/orders', ordersRouter);
   app.use('/email', emailRouter);
   console.log('[stripe] Stripe flow enabled');
 } else {
   app.use('/register', (req, res) => res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' }));
-  app.use('/orders', (req, res, next) => {
-    // Allow GET /orders/skus through even when Stripe is disabled
-    if (req.method === 'GET' && req.path === '/skus') return next();
-    res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' });
-  });
-  app.use('/orders', ordersRouter); // still mounts /skus
   console.log('[stripe] Stripe flow disabled (ENABLE_STRIPE=false)');
 }
 

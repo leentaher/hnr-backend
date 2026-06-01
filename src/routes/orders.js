@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const Stripe = require('stripe');
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
+const stripe = stripeEnabled ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const STRIPE_DISABLED = { error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' };
 const { getOrder, createOrder, incrementOrderCount, decrementFreeOrder } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { getProduct, listSkus } = require('../lib/products');
@@ -14,8 +16,9 @@ router.get('/skus', (req, res) => {
   res.json({ skus: listSkus() });
 });
 
-// GET /orders/:id
+// GET /orders/:id  (Stripe flow only)
 router.get('/:id', auth, async (req, res) => {
+  if (!stripeEnabled) return res.status(404).json(STRIPE_DISABLED);
   let order;
   try {
     order = await getOrder(req.params.id);
@@ -28,8 +31,9 @@ router.get('/:id', auth, async (req, res) => {
   res.json({ order_id: order.order_id, sku: order.sku, status: order.status, created_at: order.created_at });
 });
 
-// POST /orders
+// POST /orders  (Stripe flow only)
 router.post('/', auth, async (req, res) => {
+  if (!stripeEnabled) return res.status(404).json(STRIPE_DISABLED);
   const { sku } = req.body || {};
   const customer = req.customer;
 

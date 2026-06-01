@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { getProduct, listSkus } = require('../lib/products');
-const { createOrder, incrementOrderCount } = require('../lib/db');
+const { getProduct } = require('../lib/products');
+const { createOrder } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { sendOrderConfirmation } = require('../lib/email');
 
@@ -85,6 +85,9 @@ router.post('/', async (req, res) => {
 
 async function createShopifyOrder({ name, email, address, product, sku }) {
   if (!SHOPIFY_DOMAIN || !SHOPIFY_TOKEN) throw new Error('Shopify not configured');
+  if (!product.shopifyVariantId || product.shopifyVariantId === 'FILL_ME') {
+    throw new Error(`Shopify variant ID not configured for SKU "${sku}" — update products.js`);
+  }
 
   const body = {
     order: {
@@ -101,6 +104,7 @@ async function createShopifyOrder({ name, email, address, product, sku }) {
         zip: address.postal_code,
         country_code: address.country,
       },
+      send_receipt: true,  // Shopify sends customer confirmation email automatically
       note: `Placed via x402 USDC payment on Base. SKU: ${sku}. Agent-native purchase.`,
       tags: 'agent-order,x402,usdc',
     },
