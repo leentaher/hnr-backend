@@ -113,7 +113,34 @@ async function isPromoUsed(code, email) {
 async function markPromoUsed(code, email) {
   await pool.query(
     'INSERT INTO used_promos (code, email, used_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-    [code.toUpperCase().trim(), email, new Date().toISOString()]
+    [code.toUpperCase().trim(), email.toLowerCase().trim(), new Date().toISOString()]
+  );
+}
+
+// Atomically claims one order slot for today, returns the new orders_today count or null if limit reached.
+// Safe under concurrent requests — the WHERE clause prevents over-counting.
+async function claimOrderSlot(apiKey, dailyLimit) {
+  const today = new Date().toISOString().slice(0, 10);
+  const r = await pool.query(
+    `UPDATE customers SET
+       orders_today = CASE WHEN last_order_date = $1 THEN orders_today + 1 ELSE 1 END,
+       last_order_date = $1
+     WHERE api_key = $2
+       AND (last_order_date IS DISTINCT FROM $1 OR orders_today < $3)
+     RETURNING orders_today`,
+    [today, apiKey, dailyLimit]
+  );
+  return r.rows[0]?.orders_today ?? null; // null = limit already reached
+}
+
+// Releases a previously claimed order slot (e.g. when payment fails after claimOrderSlot).
+// Decrements orders_today only if last_order_date is still today — prevents undercounting on day rollover.
+async function releaseOrderSlot(apiKey) {
+  const today = new Date().toISOString().slice(0, 10);
+  await pool.query(
+    `UPDATE customers SET orders_today = GREATEST(orders_today - 1, 0)
+     WHERE api_key = $1 AND last_order_date = $2 AND orders_today > 0`,
+    [apiKey, today]
   );
 }
 
@@ -174,4 +201,4 @@ async function incrementX402RateLimit(email) {
   return r.rows[0].count; // new count after increment
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, claimOrderSlot, releaseOrderSlot, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };

@@ -96,13 +96,13 @@ function buildEmailHtml({ firstName, orderName, city, country, totalPrice }) {
 router.post('/resend/:orderId', async (req, res) => {
   // Require admin secret header
   const adminSecret = process.env.ADMIN_SECRET;
-  if (adminSecret) {
-    const provided = (req.headers['x-admin-secret'] || '').trim();
-    if (!provided || provided !== adminSecret) {
-      return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid X-Admin-Secret header.' });
-    }
-  } else {
-    console.warn('[email/resend] ADMIN_SECRET not set — endpoint is unauthenticated. Set ADMIN_SECRET in Railway.');
+  if (!adminSecret) {
+    console.error('[email/resend] ADMIN_SECRET not set — endpoint is disabled. Set ADMIN_SECRET in Railway.');
+    return res.status(503).json({ error: 'not_configured', message: 'Email resend is not available. Server configuration required.' });
+  }
+  const provided = (req.headers['x-admin-secret'] || '').trim();
+  if (!provided || provided !== adminSecret) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid X-Admin-Secret header.' });
   }
 
   const ip = req.ip;

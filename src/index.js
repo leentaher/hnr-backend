@@ -55,12 +55,17 @@ const allowedOrigins = new Set(
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (!origin || allowedOrigins.size === 0 || allowedOrigins.has(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  if (origin && allowedOrigins.has(origin)) {
+    // Known origin: allow full headers including Authorization
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, Payment-Signature, MCP-Session-Id');
+  } else if (!origin || allowedOrigins.size === 0) {
+    // No browser origin (agent/server call) or no origins configured: omit ACAO entirely.
+    // Browsers block credentialed requests to wildcard origins anyway; agents don't need CORS.
+  } else {
+    // Unknown origin — block silently (no ACAO header = browser blocks the response)
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, Payment-Signature, MCP-Session-Id');
-  // Only expose payment headers — not a blanket wildcard
   res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response, Payment-Required');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -77,6 +82,115 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
+// Validate POST /checkout fields BEFORE x402 fires so payment never settles on invalid input.
+// Requests that fail here return 400 without touching the x402 middleware.
+// Valid requests fall through to x402 (which issues a 402 challenge if unpaid,
+// or settles payment and calls next() if the X-Payment header is present).
+app.post('/checkout', async (req, res, next) => {
+  const { sku, name, email, address } = req.body || {};
+
+  if (!sku) {
+    return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
+  }
+
+  if (!getProduct(sku)) {
+    return res.status(400).json({ error: 'invalid_sku', message: `SKU "${sku}" not found`, hint: 'GET /orders/skus to see available products' });
+  }
+
+  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
+    return res.status(400).json({
+      error: 'needs_address',
+      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
+      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
+      hint: 'Retry POST /checkout with all required fields.',
+    });
+  }
+
+  const nameTrimmed = name.trim();
+  if (nameTrimmed.length < 2 || nameTrimmed.split(/\s+/).length < 2) {
+    return res.status(400).json({
+      error: 'invalid_name',
+      message: 'A full name (first and last) is required for the shipping label.',
+      hint: 'Provide the recipient\'s full name e.g. "Jane Smith". No payment is charged.',
+    });
+  }
+
+  const TEST_DOMAINS = new Set(['test.com', 'test.test', 'example.com', 'example.org',
+    'example.net', 'dummy.com', 'fake.com', 'noemail.com', 'noreply.com', 'invalid.com']);
+  const emailDomain = email.toLowerCase().split('@')[1] || '';
+  if (TEST_DOMAINS.has(emailDomain)) {
+    return res.status(400).json({
+      error: 'invalid_email',
+      message: `"${emailDomain}" is not a valid email domain. Provide a real email to receive your order confirmation.`,
+      hint: 'Use the recipient\'s real email address. No payment is charged.',
+    });
+  }
+
+  if (address.line1.trim().length < 5) {
+    return res.status(400).json({
+      error: 'invalid_address',
+      field: 'address.line1',
+      message: 'Street address must be at least 5 characters.',
+      hint: 'Provide the full street address e.g. "123 Main Street". No payment is charged.',
+    });
+  }
+
+  const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
+  for (const [field, max] of Object.entries(fieldLimits)) {
+    const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
+    if (val && val.length > max) {
+      return res.status(400).json({
+        error: 'field_too_long',
+        field,
+        max_length: max,
+        message: `"${field}" exceeds maximum length of ${max} characters.`,
+      });
+    }
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({
+      error: 'invalid_email',
+      message: `"${email}" is not a valid email address`,
+      hint: 'Provide a valid email address (e.g. name@example.com).',
+    });
+  }
+
+  if (!/^[A-Z]{2}$/.test(address.country.toUpperCase())) {
+    return res.status(400).json({
+      error: 'invalid_country',
+      message: `"${address.country}" is not a valid ISO country code`,
+      hint: 'Use a 2-letter ISO country code e.g. US, CA, GB, AU.',
+    });
+  }
+
+  address.country = address.country.toUpperCase();
+  req.body.email = email.toLowerCase();
+  const normEmail = req.body.email;
+
+  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
+  if (dailyLimit > 0) {
+    try {
+      const count = await getX402RateLimit(normEmail);
+      if (count >= dailyLimit) {
+        return res.status(429).json({
+          error: 'rate_limit',
+          message: `This email has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
+          hint: `Maximum ${dailyLimit} x402 orders per email per 24 hours.`,
+        });
+      }
+    } catch (err) {
+      console.error('[checkout] Rate limit DB error — blocking request:', err.message);
+      return res.status(503).json({
+        error: 'service_unavailable',
+        message: 'Unable to verify rate limit. Please try again in a moment.',
+      });
+    }
+  }
+
+  next();
+});
 
 // x402 payment middleware — protects POST /checkout with USDC on Base
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
@@ -181,121 +295,6 @@ if (process.env.STORE_WALLET_ADDRESS) {
 } else {
   console.warn('[x402] STORE_WALLET_ADDRESS not set — x402 checkout disabled');
 }
-
-// Validate POST /checkout fields AFTER x402 fires — unpaid requests get a clean 402 first,
-// field validation only runs once payment is confirmed.
-app.post('/checkout', async (req, res, next) => {
-  const { sku, name, email, address } = req.body || {};
-
-  if (!sku) {
-    return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
-  }
-
-  if (!getProduct(sku)) {
-    return res.status(400).json({ error: 'invalid_sku', message: `SKU "${sku}" not found`, hint: 'GET /orders/skus to see available products' });
-  }
-
-  if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
-    return res.status(400).json({
-      error: 'needs_address',
-      prompt: 'Ask the human: what is their full name, email address, and shipping address (street, city, state, postal code, country)?',
-      required: ['name', 'email', 'address.line1', 'address.city', 'address.state', 'address.postal_code', 'address.country'],
-      hint: 'Retry POST /checkout with all required fields.',
-    });
-  }
-
-  // ── Quality validation — catches obviously fake/test data before payment fires ──
-
-  // Name: must be at least 2 chars and contain at least 2 words (first + last)
-  // Blocks single-word placeholders like "Test", "User", "Agent"
-  const nameTrimmed = name.trim();
-  if (nameTrimmed.length < 2 || nameTrimmed.split(/\s+/).length < 2) {
-    return res.status(400).json({
-      error: 'invalid_name',
-      message: 'A full name (first and last) is required for the shipping label.',
-      hint: 'Provide the recipient\'s full name e.g. "Jane Smith". No payment is charged.',
-    });
-  }
-
-  // Email: block known test/throwaway domains that will never receive a real confirmation
-  const TEST_DOMAINS = new Set(['test.com', 'test.test', 'example.com', 'example.org',
-    'example.net', 'dummy.com', 'fake.com', 'noemail.com', 'noreply.com', 'invalid.com']);
-  const emailDomain = email.toLowerCase().split('@')[1] || '';
-  if (TEST_DOMAINS.has(emailDomain)) {
-    return res.status(400).json({
-      error: 'invalid_email',
-      message: `"${emailDomain}" is not a valid email domain. Provide a real email to receive your order confirmation.`,
-      hint: 'Use the recipient\'s real email address. No payment is charged.',
-    });
-  }
-
-  // Address: street line must look like a real address (at least 5 chars, not just "123")
-  if (address.line1.trim().length < 5) {
-    return res.status(400).json({
-      error: 'invalid_address',
-      field: 'address.line1',
-      message: 'Street address must be at least 5 characters.',
-      hint: 'Provide the full street address e.g. "123 Main Street". No payment is charged.',
-    });
-  }
-
-  // ── Field length limits ──
-  const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
-  for (const [field, max] of Object.entries(fieldLimits)) {
-    const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
-    if (val && val.length > max) {
-      return res.status(400).json({
-        error: 'field_too_long',
-        field,
-        max_length: max,
-        message: `"${field}" exceeds maximum length of ${max} characters.`,
-      });
-    }
-  }
-
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.status(400).json({
-      error: 'invalid_email',
-      message: `"${email}" is not a valid email address`,
-      hint: 'Provide a valid email address (e.g. name@example.com).',
-    });
-  }
-
-  if (!/^[A-Z]{2}$/.test(address.country.toUpperCase())) {
-    return res.status(400).json({
-      error: 'invalid_country',
-      message: `"${address.country}" is not a valid ISO country code`,
-      hint: 'Use a 2-letter ISO country code e.g. US, CA, GB, AU.',
-    });
-  }
-
-  address.country = address.country.toUpperCase();
-  req.body.email = email.toLowerCase();
-  const normEmail = req.body.email;
-
-  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
-  if (dailyLimit > 0) {
-    try {
-      const count = await getX402RateLimit(normEmail);
-      if (count >= dailyLimit) {
-        return res.status(429).json({
-          error: 'rate_limit',
-          message: `This email has already placed ${dailyLimit} orders today via x402. Try again tomorrow.`,
-          hint: `Maximum ${dailyLimit} x402 orders per email per 24 hours.`,
-        });
-      }
-    } catch (err) {
-      console.error('[checkout] Rate limit DB error — blocking request:', err.message);
-      return res.status(503).json({
-        error: 'service_unavailable',
-        message: 'Unable to verify rate limit. Please try again in a moment.',
-      });
-    }
-  }
-
-  next();
-});
 
 // Routes
 // x402 flow — always enabled

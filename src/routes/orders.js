@@ -4,7 +4,9 @@ const Stripe = require('stripe');
 const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
 const stripe = stripeEnabled ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const STRIPE_DISABLED = { error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' };
-const { getOrder, createOrder, incrementOrderCount, decrementFreeOrder } = require('../lib/db');
+const { getOrder, createOrder, claimOrderSlot, releaseOrderSlot, incrementOrderCount, decrementFreeOrder } = require('../lib/db');
+const { sendOrderConfirmation } = require('../lib/email');
+const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
 const { generateOrderId } = require('../lib/keys');
 const { getProduct, listSkus } = require('../lib/products');
 const auth = require('../middleware/auth');
@@ -48,18 +50,16 @@ router.post('/', auth, async (req, res) => {
     return res.status(503).json({ error: 'product_not_configured', message: `Shopify variant ID not set for SKU "${sku}".` });
   }
 
-  // Check daily limit
-  const today = new Date().toISOString().slice(0, 10);
-  const ordersToday = customer.last_order_date === today ? customer.orders_today : 0;
-  if (ordersToday >= DAILY_ORDER_LIMIT) {
+  // Generate orderId up front — used as the Stripe idempotency key.
+  const orderId = generateOrderId();
+
+  // Atomically claim one order slot. Safe under concurrent requests — the DB UPDATE
+  // only succeeds when the count is still below the limit, so two concurrent calls
+  // cannot both claim the same slot.
+  const slotCount = await claimOrderSlot(req.apiKey, DAILY_ORDER_LIMIT);
+  if (slotCount === null) {
     return res.status(429).json({ error: 'daily_limit_reached', message: `Max ${DAILY_ORDER_LIMIT} orders per day.`, resets_at: 'midnight UTC' });
   }
-
-  // Generate orderId up front — used as the Stripe idempotency key so each request
-  // is guaranteed unique, even under concurrent calls for the same customer.
-  // This prevents the race condition where two concurrent requests read the same
-  // ordersToday value and generate a colliding idempotency key.
-  const orderId = generateOrderId();
 
   // 1. Payment — skip Stripe if customer has a free order remaining
   let paymentIntentId = null;
@@ -70,10 +70,12 @@ router.post('/', auth, async (req, res) => {
     try {
       const pms = await stripe.paymentMethods.list({ customer: customer.stripe_customer_id, type: 'card' });
       if (!pms.data.length) {
+        releaseOrderSlot(req.apiKey).catch(e => console.error('[orders] releaseOrderSlot failed:', e.message));
         return res.status(402).json({ error: 'no_payment_method', message: 'No saved card. The human must complete card setup first.', hint: 'Call POST /register/resend-setup to re-send the setup link.' });
       }
       paymentMethodId = pms.data[0].id;
     } catch (err) {
+      releaseOrderSlot(req.apiKey).catch(e => console.error('[orders] releaseOrderSlot failed:', e.message));
       return res.status(502).json({ error: 'stripe_error', message: 'Unable to retrieve payment method.' });
     }
 
@@ -94,10 +96,12 @@ router.post('/', auth, async (req, res) => {
       });
     } catch (err) {
       console.error('[orders] Stripe payment failed:', err.message);
+      releaseOrderSlot(req.apiKey).catch(e => console.error('[orders] releaseOrderSlot failed:', e.message));
       return res.status(402).json({ error: 'payment_failed', reason: err.decline_code || err.code || 'unknown' });
     }
 
     if (paymentIntent.status !== 'succeeded') {
+      releaseOrderSlot(req.apiKey).catch(e => console.error('[orders] releaseOrderSlot failed:', e.message));
       return res.status(402).json({ error: 'payment_not_confirmed', stripe_status: paymentIntent.status });
     }
 
@@ -110,31 +114,43 @@ router.post('/', auth, async (req, res) => {
     shopifyOrderId = await createShopifyOrder({ customer, product, sku, paymentIntentId: paymentIntentId || 'free_order' });
   } catch (err) {
     console.error('[orders] Shopify failed!', { paymentIntentId, error: err.message });
+    if (paymentIntentId) {
+      // Payment is already taken — alert store owner for manual resolution
+      try {
+        await sendOrderConfirmation({
+          to: ALERT_EMAIL,
+          subject: '🚨 Stripe payment succeeded but Shopify order FAILED — manual action needed',
+          html: `<p><strong>URGENT:</strong> A customer was charged via Stripe but the Shopify order failed.</p>
+                 <p><strong>Customer:</strong> ${customer.email}</p>
+                 <p><strong>Stripe PaymentIntent:</strong> ${paymentIntentId}</p>
+                 <p><strong>SKU:</strong> ${sku}</p>
+                 <p><strong>Error:</strong> ${err.message}</p>
+                 <p>Please create the Shopify order manually and confirm with the customer. The Stripe charge may need to be refunded if you cannot fulfill.</p>`,
+        });
+      } catch (emailErr) {
+        console.error('[orders] Failed to send reconciliation alert:', emailErr.message);
+      }
+    }
     const errPayload = { error: 'shopify_error', message: 'Order creation failed.' };
     if (paymentIntentId) errPayload.stripe_payment_intent_id = paymentIntentId;
     return res.status(502).json(errPayload);
   }
 
-  // 4. Save order, update counts
-  // Shopify order is already created — these DB writes are post-payment bookkeeping.
-  // Failures here are non-fatal from the customer's POV (hat is still shipping)
-  // but we log loudly so they can be reconciled manually.
+  // 4. Save order record. Order slot was already claimed atomically above; free order
+  // decrement is the only remaining counter to update.
   try {
     await createOrder({ orderId, apiKey: req.apiKey, sku, stripePaymentIntentId: paymentIntentId, shopifyOrderId });
   } catch (err) {
-    // Duplicate orderId is harmless (idempotent retry) — anything else needs attention
     if (!err.message?.includes('duplicate') && err.code !== '23505') {
       console.error('[orders] ALERT: createOrder failed after Shopify success! Manual reconciliation needed.', {
         orderId, sku, shopifyOrderId, paymentIntentId, error: err.message,
       });
     }
   }
-  try {
-    await incrementOrderCount(req.apiKey);
-    if (isFreeOrder) await decrementFreeOrder(req.apiKey);
-  } catch (err) {
-    // Non-fatal — daily limit may be inaccurate for this customer until next boot
-    console.error('[orders] Failed to update order counts (non-fatal):', err.message);
+  if (isFreeOrder) {
+    decrementFreeOrder(req.apiKey).catch(err =>
+      console.error('[orders] Failed to decrement free order (non-fatal):', err.message)
+    );
   }
 
   res.status(201).json({
