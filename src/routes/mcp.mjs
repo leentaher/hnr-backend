@@ -208,11 +208,13 @@ function createMcpServer() {
 
 const MCP_MAX_SESSIONS = 200;          // hard cap — prevents memory DoS
 const MCP_SESSION_TTL_MS = 30 * 60_000; // 30 min idle TTL for abandoned sessions
+const MCP_CALLS_PER_SESSION = 50;      // per-session call budget — blocks spam regardless of IP
 
 export function createMcpRouter() {
   const router = express.Router();
   const transports = {};
   const sessionTimestamps = {}; // tracks last-activity time per session
+  const sessionCallCounts = {}; // tracks total tool calls per session
 
   // Prune abandoned sessions that haven't been explicitly closed
   setInterval(() => {
@@ -221,6 +223,7 @@ export function createMcpRouter() {
       if (ts < cutoff) {
         delete transports[id];
         delete sessionTimestamps[id];
+        delete sessionCallCounts[id];
       }
     }
   }, 5 * 60_000).unref();
@@ -230,6 +233,13 @@ export function createMcpRouter() {
       const sessionId = req.headers['mcp-session-id'];
 
       if (sessionId && transports[sessionId]) {
+        // Enforce per-session call budget. Applies regardless of the caller's IP,
+        // so agents spamming register_human via MCP can't bypass the IP-based rate
+        // limit on /register (all MCP→internal calls appear to come from localhost).
+        sessionCallCounts[sessionId] = (sessionCallCounts[sessionId] || 0) + 1;
+        if (sessionCallCounts[sessionId] > MCP_CALLS_PER_SESSION) {
+          return res.status(429).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Session call limit reached. Start a new session.' }, id: null });
+        }
         sessionTimestamps[sessionId] = Date.now(); // refresh TTL on activity
         await transports[sessionId].handleRequest(req, res, req.body);
         return;
@@ -250,6 +260,7 @@ export function createMcpRouter() {
           if (transport.sessionId) {
             delete transports[transport.sessionId];
             delete sessionTimestamps[transport.sessionId];
+            delete sessionCallCounts[transport.sessionId];
           }
         };
         const server = createMcpServer();
