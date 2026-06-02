@@ -204,6 +204,42 @@ app.post('/checkout', async (req, res, next) => {
     });
   }
 
+  // ── Quality validation — catches obviously fake/test data before payment fires ──
+
+  // Name: must be at least 2 chars and contain at least 2 words (first + last)
+  // Blocks single-word placeholders like "Test", "User", "Agent"
+  const nameTrimmed = name.trim();
+  if (nameTrimmed.length < 2 || nameTrimmed.split(/\s+/).length < 2) {
+    return res.status(400).json({
+      error: 'invalid_name',
+      message: 'A full name (first and last) is required for the shipping label.',
+      hint: 'Provide the recipient\'s full name e.g. "Jane Smith". No payment is charged.',
+    });
+  }
+
+  // Email: block known test/throwaway domains that will never receive a real confirmation
+  const TEST_DOMAINS = new Set(['test.com', 'test.test', 'example.com', 'example.org',
+    'example.net', 'dummy.com', 'fake.com', 'noemail.com', 'noreply.com', 'invalid.com']);
+  const emailDomain = email.toLowerCase().split('@')[1] || '';
+  if (TEST_DOMAINS.has(emailDomain)) {
+    return res.status(400).json({
+      error: 'invalid_email',
+      message: `"${emailDomain}" is not a valid email domain. Provide a real email to receive your order confirmation.`,
+      hint: 'Use the recipient\'s real email address. No payment is charged.',
+    });
+  }
+
+  // Address: street line must look like a real address (at least 5 chars, not just "123")
+  if (address.line1.trim().length < 5) {
+    return res.status(400).json({
+      error: 'invalid_address',
+      field: 'address.line1',
+      message: 'Street address must be at least 5 characters.',
+      hint: 'Provide the full street address e.g. "123 Main Street". No payment is charged.',
+    });
+  }
+
+  // ── Field length limits ──
   const fieldLimits = { name: 200, 'address.line1': 200, 'address.city': 100, 'address.state': 100, 'address.postal_code': 20 };
   for (const [field, max] of Object.entries(fieldLimits)) {
     const val = field.includes('.') ? address[field.split('.')[1]] : (field === 'name' ? name : null);
