@@ -87,14 +87,30 @@ app.get('/.well-known/openapi.json', (req, res) => {
 // Valid requests fall through to x402 (which issues a 402 challenge if unpaid,
 // or settles payment and calls next() if the X-Payment header is present).
 app.post('/checkout', async (req, res, next) => {
+  // Fulfillment gates run BEFORE the x402 middleware so we never settle USDC for an order
+  // we can't fulfill (store closed, Shopify unconfigured, variant missing). Returning here
+  // skips the x402 middleware entirely, so no payment is ever taken.
+  if ((process.env.STORE_OPEN || 'true').toLowerCase().trim() === 'false') {
+    return res.status(503).json({ error: 'store_closed', message: 'The store is temporarily closed. Check back soon.' });
+  }
+
   const { sku, name, email, address } = req.body || {};
 
   if (!sku) {
     return res.status(400).json({ error: 'missing_field', field: 'sku', hint: 'GET /orders/skus to see available products' });
   }
 
-  if (!getProduct(sku)) {
+  const product = getProduct(sku);
+  if (!product) {
     return res.status(400).json({ error: 'invalid_sku', message: `SKU "${sku}" not found`, hint: 'GET /orders/skus to see available products' });
+  }
+
+  // Can we actually fulfill this SKU? Check before payment, not after.
+  if (!process.env.SHOPIFY_STORE_DOMAIN || !process.env.SHOPIFY_ADMIN_API_KEY) {
+    return res.status(503).json({ error: 'service_unavailable', message: 'Fulfillment is temporarily unavailable. No payment was taken.' });
+  }
+  if (!product.shopifyVariantId || product.shopifyVariantId === 'FILL_ME') {
+    return res.status(503).json({ error: 'product_not_configured', message: `SKU "${sku}" is not available for purchase right now. No payment was taken.` });
   }
 
   if (!name || !email || !address?.line1 || !address?.city || !address?.state || !address?.postal_code || !address?.country) {
