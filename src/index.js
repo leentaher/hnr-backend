@@ -195,6 +195,7 @@ app.post('/checkout', async (req, res, next) => {
 // x402 payment middleware — protects POST /checkout with USDC on Base
 // STORE_WALLET_ADDRESS: your Base wallet address that receives USDC
 // Falls back gracefully if not configured (x402 disabled)
+let x402Active = false; // fail-closed gate: /checkout only mounts the real handler when x402 settlement is live
 if (process.env.STORE_WALLET_ADDRESS) {
   // X402_ENV=testnet (default) | mainnet — single flag to switch between networks.
   // Individual overrides: X402_NETWORK and X402_PRICE still take precedence if set explicitly.
@@ -288,17 +289,27 @@ if (process.env.STORE_WALLET_ADDRESS) {
       },
       resourceServer,
     ));
+    x402Active = true;
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network}, price: ${x402Price})`);
   } catch (err) {
-    console.warn('[x402] Failed to initialize payment middleware (non-fatal):', err.message);
+    console.error('[x402] FATAL: payment middleware failed to initialize — /checkout DISABLED (fail closed) to prevent unpaid orders:', err.message);
   }
 } else {
-  console.warn('[x402] STORE_WALLET_ADDRESS not set — x402 checkout disabled');
+  console.error('[x402] STORE_WALLET_ADDRESS not set — /checkout DISABLED (fail closed) to prevent unpaid orders');
 }
 
 // Routes
-// x402 flow — always enabled
-app.use('/checkout', checkoutRouter);
+// x402 flow — FAIL CLOSED: only mount the real checkout handler when payment settlement is
+// actually active. If x402 failed to init (or STORE_WALLET_ADDRESS is unset), serve a 503
+// instead — otherwise checkout.js would create Shopify orders with no payment taken.
+if (x402Active) {
+  app.use('/checkout', checkoutRouter);
+} else {
+  app.use('/checkout', (req, res) => res.status(503).json({
+    error: 'payment_unavailable',
+    message: 'Checkout is temporarily unavailable — no payment system is active. No order was created and no payment was taken.',
+  }));
+}
 
 console.log(`[stripe] ENABLE_STRIPE="${process.env.ENABLE_STRIPE}" → stripeEnabled=${stripeEnabled}`);
 // GET /orders/skus is always available regardless of Stripe flag
