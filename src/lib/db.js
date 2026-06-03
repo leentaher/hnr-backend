@@ -63,6 +63,15 @@ async function initDb() {
     }
   }
 
+  // Migration: x402 payment identity on orders — payer wallet + EIP-3009 nonce.
+  // Enables idempotency (one payment authorization can create at most one order, even
+  // under concurrent retries) and reconciliation of the capture-after-fulfillment window.
+  // NULLs are allowed (Stripe-era orders) and are distinct under a Postgres unique index,
+  // so many NULL rows coexist fine.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payer_address TEXT`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_nonce TEXT`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS orders_payment_nonce_uq ON orders (payment_nonce)`);
+
   // Migration: hash any plain-text api_keys still in the DB.
   // Plain keys start with 'sk_agent_'; SHA-256 hashes are 64 hex chars and never match that prefix.
   // Short-circuit with a cheap COUNT first to avoid a table scan on every startup once migrated.
@@ -181,6 +190,47 @@ async function getOrder(orderId) {
   return r.rows[0] || null;
 }
 
+async function getOrderByNonce(nonce) {
+  if (!nonce) return null;
+  const r = await pool.query('SELECT * FROM orders WHERE payment_nonce = $1', [nonce]);
+  return r.rows[0] || null;
+}
+
+// x402 two-phase order create — step 1: atomically RESERVE a payment nonce by inserting a
+// 'pending' order. The unique index on payment_nonce makes this the concurrency gate: a
+// duplicate/retried payment authorization (same nonce) cannot create a second order.
+// Returns { reserved: true } on a fresh reservation, or { reserved: false, existing } when
+// the nonce was already seen (idempotent retry or concurrent double-submit).
+async function reserveX402Order({ orderId, apiKey, sku, payerAddress, paymentNonce }) {
+  const r = await pool.query(
+    `INSERT INTO orders (order_id, api_key, sku, status, created_at, payer_address, payment_nonce)
+     VALUES ($1, $2, $3, 'pending', $4, $5, $6)
+     ON CONFLICT (payment_nonce) DO NOTHING
+     RETURNING order_id`,
+    [orderId, apiKey, sku, new Date().toISOString(), payerAddress, paymentNonce]
+  );
+  if (r.rows[0]) return { reserved: true };
+  return { reserved: false, existing: await getOrderByNonce(paymentNonce) };
+}
+
+// x402 two-phase order create — step 2a: mark a reserved order placed once Shopify succeeds.
+async function markX402OrderPlaced(orderId, shopifyOrderId) {
+  await pool.query(
+    `UPDATE orders SET status = 'placed', shopify_order_id = $2 WHERE order_id = $1`,
+    [orderId, shopifyOrderId]
+  );
+}
+
+// x402 two-phase order create — step 2b: mark a reserved order failed if Shopify creation
+// throws. Payment is cancelled by the x402 middleware on a 4xx/5xx response, so this row
+// records an attempt that took no money.
+async function markX402OrderFailed(orderId) {
+  await pool.query(
+    `UPDATE orders SET status = 'fulfillment_failed' WHERE order_id = $1`,
+    [orderId]
+  );
+}
+
 // x402 rate limit — read-only check, returns current count without incrementing.
 // Use this BEFORE payment fires so failed payments don't consume the daily quota.
 async function getX402RateLimit(email) {
@@ -207,4 +257,4 @@ async function incrementX402RateLimit(email) {
   return r.rows[0].count; // new count after increment
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, rotateApiKey, claimOrderSlot, releaseOrderSlot, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, rotateApiKey, claimOrderSlot, releaseOrderSlot, incrementOrderCount, createOrder, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };
