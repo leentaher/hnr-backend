@@ -4,22 +4,7 @@ const { getProduct } = require('../lib/products');
 const { createOrder, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, incrementX402RateLimit } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { sendOrderConfirmation } = require('../lib/email');
-
-// Recover the payer wallet + EIP-3009 nonce from the x402 payment header so we can key
-// idempotency and reconciliation on them. The header is base64(JSON), sent as
-// PAYMENT-SIGNATURE (x402 v2) or X-PAYMENT (v1). Exact-EVM payload shape:
-//   { x402Version, payload: { authorization: { from, to, value, nonce, ... }, signature } }
-function extractPaymentIdentity(req) {
-  const header = req.get('payment-signature') || req.get('x-payment');
-  if (!header) return { payer: null, nonce: null };
-  try {
-    const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf-8'));
-    const auth = decoded?.payload?.authorization || {};
-    return { payer: auth.from || null, nonce: auth.nonce || null };
-  } catch {
-    return { payer: null, nonce: null };
-  }
-}
+const { extractPaymentIdentity } = require('../lib/x402-payment');
 
 // Minimal HTML escaper — prevents injected HTML/script in alert emails sent to store owner
 function esc(s) {
