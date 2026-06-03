@@ -33,8 +33,11 @@ router.get('/:id', auth, async (req, res) => {
   res.json({ order_id: order.order_id, sku: order.sku, status: order.status, created_at: order.created_at });
 });
 
+const STORE_CLOSED = { error: 'store_closed', message: 'The store is temporarily closed. Check back soon.' };
+
 // POST /orders  (Stripe flow only)
 router.post('/', auth, async (req, res) => {
+  if ((process.env.STORE_OPEN || 'true').toLowerCase().trim() === 'false') return res.status(503).json(STORE_CLOSED);
   if (!stripeEnabled) return res.status(404).json(STRIPE_DISABLED);
   const { sku } = req.body || {};
   const customer = req.customer;

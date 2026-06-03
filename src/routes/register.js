@@ -4,10 +4,10 @@ const Stripe = require('stripe');
 // Guard Stripe init — throws on boot when STRIPE_SECRET_KEY is unset (same fix as orders.js)
 const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
 const stripe = stripeEnabled ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
-const { getCustomerByEmail, createCustomer, isPromoUsed, markPromoUsed } = require('../lib/db');
+const { getCustomerByEmail, createCustomer, rotateApiKey, isPromoUsed, markPromoUsed } = require('../lib/db');
 const { generateApiKey } = require('../lib/keys');
 const { sendApiKeyEmail, sendCardSetupEmail } = require('../lib/email');
-const { isValidPromoCode } = require('../lib/promos');
+const { isValidPromoCode, getPromoMaxUses } = require('../lib/promos');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAILY_REGISTER_LIMIT = 5;
@@ -65,7 +65,7 @@ router.post('/', async (req, res) => {
     if (!isValidPromoCode(promo_code)) {
       return res.status(400).json({ error: 'invalid_promo_code', message: 'That promo code is not valid.' });
     }
-    const alreadyUsed = await isPromoUsed(promo_code, email);
+    const alreadyUsed = await isPromoUsed(promo_code, email, getPromoMaxUses(promo_code));
     if (alreadyUsed) {
       return res.status(409).json({ error: 'promo_already_used', message: 'That promo code has already been redeemed by this email.' });
     }
@@ -161,10 +161,16 @@ router.post('/resend-setup', async (req, res) => {
     return res.status(404).json({ error: 'not_found', message: 'Email not registered. Use POST /register first.' });
   }
 
-  const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
-  sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[resend-setup] Email failed:', err.message));
+  const newApiKey = generateApiKey();
+  await rotateApiKey(email, newApiKey);
+  sendApiKeyEmail({ to: email, apiKey: newApiKey }).catch(err => console.warn('[resend-setup] API key email failed:', err.message));
 
-  res.json({ message: 'Setup link sent to the human\'s email. They can click it any time to save their card.' });
+  const setupUrl = `${APP_URL}/setup?email=${encodeURIComponent(email)}`;
+  if (customer.free_orders_remaining === 0) {
+    sendCardSetupEmail({ to: email, setupUrl }).catch(err => console.warn('[resend-setup] Card setup email failed:', err.message));
+  }
+
+  res.json({ message: 'A fresh api_key has been sent to the human\'s email. They should check their inbox and pass it back to complete the order.' });
 });
 
 module.exports = router;

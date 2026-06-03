@@ -11,6 +11,15 @@
 import { x402Client, x402HTTPClient } from '@x402/core/client';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
+import { createWalletClient, createPublicClient, http } from 'viem';
+
+// Inline chain def — avoids importing viem/chains barrel (hangs for 90s+ on first load)
+const baseSepolia = {
+  id: 84532,
+  name: 'Base Sepolia',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://sepolia.base.org'] } },
+};
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) {
@@ -37,9 +46,21 @@ async function run() {
   const account = privateKeyToAccount(PRIVATE_KEY);
   console.log(`\nAgent wallet: ${account.address}`);
 
+  // Full wallet client — signer needs RPC for readContract / getTransactionCount
+  const walletClient = createWalletClient({
+    account,
+    chain: baseSepolia,
+    transport: http('https://sepolia.base.org'),
+  });
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http('https://sepolia.base.org'),
+  });
+  const signer = { ...walletClient, ...publicClient, address: account.address };
+
   // Build x402 client with EVM exact scheme (handles EIP-3009 signing)
   const coreClient = new x402Client();
-  registerExactEvmScheme(coreClient, { signer: account });
+  registerExactEvmScheme(coreClient, { signer });
   const httpClient = new x402HTTPClient(coreClient);
 
   const body = JSON.stringify(ORDER);
@@ -64,14 +85,14 @@ async function run() {
   const req = paymentRequired.accepts[0];
   console.log(`Got 402. Payment details:`);
   console.log(`  Network:  ${req.network}`);
-  console.log(`  Amount:   $${Number(req.maxAmountRequired) / 1_000_000} USDC`);
+  console.log(`  Amount:   $${Number(req.amount) / 1_000_000} USDC`);
   console.log(`  Pay to:   ${req.payTo}`);
 
   // Step 3: Create signed payment payload (EIP-3009 transferWithAuthorization)
   console.log('\nStep 3: Signing payment authorization...');
   const paymentPayload = await httpClient.createPaymentPayload(paymentRequired);
   const paymentHeader = httpClient.encodePaymentSignatureHeader(paymentPayload);
-  console.log('Signed.');
+  console.log('Signed. Header keys:', Object.keys(paymentHeader));
 
   // Step 4: Retry /checkout with the signed payment header
   console.log('\nStep 4: Re-sending /checkout with payment proof...');
@@ -82,14 +103,25 @@ async function run() {
   });
 
   const result = await secondRes.json();
+  const paymentResponse = secondRes.headers.get('x-payment-response');
+  const paymentRequired2 = secondRes.headers.get('payment-required');
   if (secondRes.status === 201) {
     console.log(`\nORDER PLACED. Hat is on the way.`);
     console.log(`  Order ID:       ${result.order_id}`);
     console.log(`  Shopify order:  ${result.shopify_order_id}`);
-    console.log(`  Payment:        ${result.payment}`);
   } else {
     console.error(`\nUnexpected response (${secondRes.status}):`);
-    console.error(result);
+    console.error('Body:', JSON.stringify(result));
+    if (paymentResponse) {
+      try {
+        const pr = JSON.parse(Buffer.from(paymentResponse, 'base64').toString());
+        console.error('X-Payment-Response (rejection reason):', JSON.stringify(pr, null, 2));
+      } catch { console.error('X-Payment-Response (raw):', paymentResponse); }
+    }
+    if (paymentRequired2) {
+      console.error('payment-required header present (server treated as fresh request — payment header not received)');
+    }
+    console.error('Response headers:', Object.fromEntries(secondRes.headers.entries()));
   }
 }
 

@@ -19,11 +19,14 @@ const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
 const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
 
+const STORE_CLOSED = { error: 'store_closed', message: 'The store is temporarily closed. Check back soon.' };
+
 // POST /checkout
 // Validation, rate limiting, and x402 payment middleware all run before this handler.
 // By the time we get here: all fields are present, email/country are valid, rate limit
 // is not exceeded, and USDC payment is settled on Base.
 router.post('/', async (req, res) => {
+  if ((process.env.STORE_OPEN || 'true').toLowerCase().trim() === 'false') return res.status(503).json(STORE_CLOSED);
   const { sku, name, email, address } = req.body || {};
 
   const product = getProduct(sku);

@@ -12,6 +12,9 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import express from 'express';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { isValidPromoCode } = require('../lib/promos.js');
 
 const BASE_URL = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
 const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
@@ -131,8 +134,17 @@ function createMcpServer() {
     async ({ name, email, address_line1, address_line2, address_city, address_state, address_postal_code, address_country, promo_code, api_key }) => {
       const address = { line1: address_line1, line2: address_line2, city: address_city, state: address_state, postal_code: address_postal_code, country: address_country };
 
+      // ── Promo validation (fast-fail before any registration or payment) ──────
+      if (promo_code && !isValidPromoCode(promo_code)) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          error: 'invalid_promo_code',
+          message: `"${promo_code}" is not a valid promo code. Double-check the code and try again, or remove it to pay via USDC.`,
+        }, null, 2) }] };
+      }
+
       // ── x402 flow ──────────────────────────────────────────────────────────
-      if (!stripeEnabled) {
+      // Promo codes bypass x402 and use the Stripe/register flow even when Stripe is disabled for direct purchases
+      if (!stripeEnabled && !promo_code) {
         const checkoutRes = await api('/checkout', {
           method: 'POST',
           body: { sku: 'hat-myagent-os', name, email, address },
@@ -178,12 +190,12 @@ function createMcpServer() {
         if (regRes.status === 201) {
           api_key = regRes.data.api_key;
         } else if (regRes.status === 409 && regRes.data.error === 'already_registered') {
-          // /register/resend-setup does NOT return api_key — agent must supply it explicitly
+          // Rotate the api_key and email it — human just needs to check inbox and paste it back
           await api('/register/resend-setup', { method: 'POST', body: { email } }).catch(() => {});
           return { content: [{ type: 'text', text: JSON.stringify({
             error: 'already_registered',
-            message: 'This email is already registered. A new card setup link has been sent to the human. To place an order you need the original api_key — ask the human to check their registration email, or pass it as the api_key parameter.',
-            hint: 'If you have the api_key, retry buy_hat and include it as the api_key parameter.',
+            message: 'This email is already registered. A fresh api_key has been sent to their inbox — ask the human to check their email, copy the api_key, and pass it back. Then retry buy_hat with that api_key.',
+            hint: 'Ask the human: "Check your email for a message from Humans Not Required — copy the api_key and paste it here."',
           }, null, 2) }] };
         } else {
           return { content: [{ type: 'text', text: JSON.stringify({ error: 'registration_failed', details: regRes.data }, null, 2) }] };

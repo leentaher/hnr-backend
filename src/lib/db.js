@@ -95,6 +95,13 @@ async function getCustomerByEmail(email) {
   return r.rows[0] || null;
 }
 
+async function rotateApiKey(email, newApiKey) {
+  await pool.query(
+    'UPDATE customers SET api_key = $1 WHERE email = $2',
+    [hashApiKey(newApiKey), email.toLowerCase().trim()]
+  );
+}
+
 async function createCustomer({ apiKey, stripeCustomerId, email, name, address, freeOrders = 0 }) {
   await pool.query(
     'INSERT INTO customers (api_key, stripe_customer_id, email, name, address, free_orders_remaining) VALUES ($1, $2, $3, $4, $5, $6)',
@@ -102,12 +109,11 @@ async function createCustomer({ apiKey, stripeCustomerId, email, name, address, 
   );
 }
 
-async function isPromoUsed(code, email) {
-  const r = await pool.query(
-    'SELECT code FROM used_promos WHERE code = $1 AND email = $2',
-    [code.toUpperCase().trim(), email.toLowerCase().trim()]
-  );
-  return r.rows.length > 0;
+async function isPromoUsed(code, email, maxUses = 1) {
+  const total = await pool.query('SELECT COUNT(*) FROM used_promos WHERE code = $1',
+    [code.toUpperCase().trim()]);
+  if (parseInt(total.rows[0].count, 10) >= maxUses) return true;
+  return false;
 }
 
 async function markPromoUsed(code, email) {
@@ -201,4 +207,4 @@ async function incrementX402RateLimit(email) {
   return r.rows[0].count; // new count after increment
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, claimOrderSlot, releaseOrderSlot, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };
+module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, rotateApiKey, claimOrderSlot, releaseOrderSlot, incrementOrderCount, createOrder, getOrder, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };
