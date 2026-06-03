@@ -138,9 +138,16 @@ function createMcpServer() {
         }, null, 2) }] };
       }
 
-      // ── x402 flow ──────────────────────────────────────────────────────────
-      // Promo codes bypass x402 and use the Stripe/register flow even when Stripe is disabled for direct purchases
-      if (!stripeEnabled && !promo_code) {
+      // ── x402 flow (Stripe disabled = USDC-only store) ───────────────────────
+      if (!stripeEnabled) {
+        // promo_code / api_key are artifacts of the retired Stripe/account flow. Rather
+        // than silently charging $X despite a promo, tell the agent promos aren't available.
+        if (promo_code) {
+          return { content: [{ type: 'text', text: JSON.stringify({
+            error: 'promo_not_available',
+            message: `This store is USDC-only — promo codes aren't accepted. Remove the promo and the hat is ${x402Price} USDC on ${x402NetworkLabel}.`,
+          }, null, 2) }] };
+        }
         const checkoutRes = await api('/checkout', {
           method: 'POST',
           body: { sku: 'hat-myagent-os', name, email, address },

@@ -398,6 +398,10 @@ setInterval(() => {
 
 // GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
 app.get('/setup', async (req, res) => {
+  // x402-only: no card setup exists. Guard before touching the (null) Stripe client.
+  if (!stripeEnabled) {
+    return res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. No card setup needed — see /checkout.' });
+  }
   // Rate limit: 5 attempts per IP per minute
   const ip = req.ip;
   const now = Date.now();
