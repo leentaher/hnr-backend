@@ -9,24 +9,21 @@ const PRODUCTS = {
   },
 };
 
-// x402 price derives from env (same logic as index.js and mcp.mjs)
-// so /orders/skus always reflects what the checkout endpoint actually charges
-const X402_ENV = (process.env.X402_ENV || 'testnet').toLowerCase();
-const isMainnet = X402_ENV === 'mainnet';
-const x402PriceStr = process.env.X402_PRICE || (isMainnet ? '$35.00' : '$1.00');
-// Strip leading $ and parse to float for the JSON field
-const x402PriceUsd = parseFloat(x402PriceStr.replace(/^\$/, '')) || (isMainnet ? 35 : 1);
+// Price comes from the single source of truth (lib/pricing) so /orders/skus always
+// reflects exactly what /checkout charges.
+const { getPricing } = require('./pricing');
 
 function getProduct(sku) {
   return PRODUCTS[sku] || null;
 }
 
 function listSkus() {
+  const { priceUsd } = getPricing();
   return Object.entries(PRODUCTS).map(([sku, p]) => ({
     sku,
     label: p.label,
     size: p.size,
-    price_usd: x402PriceUsd,   // reflects actual x402 charge (testnet: $1, mainnet: $35)
+    price_usd: priceUsd,   // single-sourced from lib/pricing — matches the x402 charge
   }));
 }
 

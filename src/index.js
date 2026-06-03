@@ -82,6 +82,38 @@ app.get('/.well-known/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'openapi.json'));
 });
 
+// Payment manifest — emitted dynamically from lib/pricing so it always matches the live
+// checkout price + network. Replaces the old static public/.well-known/payment-manifest.json,
+// which hardcoded $35 and could drift from what /checkout actually charges.
+app.get('/.well-known/payment-manifest.json', (req, res) => {
+  const { getPricing } = require('./lib/pricing');
+  const { priceStr, network, networkLabel, usdcAddress } = getPricing();
+  res.json({
+    protocol: 'x402',
+    version: '2',
+    description: 'Human Not Required accepts USDC payments from AI agents via x402 on Base. No registration, no card — agents pay directly from their wallet.',
+    endpoints: [
+      {
+        path: '/checkout',
+        method: 'POST',
+        price: priceStr,
+        currency: 'USDC',
+        network,
+        chain: networkLabel,
+        usdc_contract: usdcAddress,
+        description: `Buy the "My Agent Bought Me This" embroidered hat — ${priceStr} USDC on ${networkLabel}. Send { sku: "hat-myagent-os", name, email, address: { line1, city, state, postal_code, country } }.`,
+        body_schema: {
+          sku: 'hat-myagent-os',
+          name: 'Full name for shipping label',
+          email: 'Email for receipt',
+          address: { line1: 'Street address', city: 'City', state: 'State/province', postal_code: 'Postal code', country: 'ISO 3166-1 alpha-2 country code' },
+        },
+      },
+    ],
+    contact: 'leen.taher@gmail.com',
+  });
+});
+
 // Validate POST /checkout fields BEFORE x402 fires so payment never settles on invalid input.
 // Requests that fail here return 400 without touching the x402 middleware.
 // Valid requests fall through to x402 (which issues a 402 challenge if unpaid,
@@ -213,21 +245,17 @@ app.post('/checkout', async (req, res, next) => {
 // Falls back gracefully if not configured (x402 disabled)
 let x402Active = false; // fail-closed gate: /checkout only mounts the real handler when x402 settlement is live
 if (process.env.STORE_WALLET_ADDRESS) {
-  // X402_ENV=testnet (default) | mainnet — single flag to switch between networks.
-  // Individual overrides: X402_NETWORK and X402_PRICE still take precedence if set explicitly.
-  const X402_ENV = (process.env.X402_ENV || 'testnet').toLowerCase();
-  const isMainnet = X402_ENV === 'mainnet';
+  // Price + network come from the single source of truth (lib/pricing) so the checkout
+  // charge, /orders/skus, the MCP tool text, and the payment manifest can never disagree.
+  const { getPricing, checkoutDescription } = require('./lib/pricing');
+  const { env: X402_ENV, network, priceStr: x402Price } = getPricing();
+  const x402Description = checkoutDescription();
   console.log(`[x402] X402_ENV=${X402_ENV}`);
 
   // x402.org/facilitator is behind Cloudflare which blocks Railway's AWS IPs.
   // Default to the Vercel proxy which can reach x402.org reliably.
   // Override via X402_FACILITATOR_URL env var if needed.
   const facilitatorUrl = process.env.X402_FACILITATOR_URL || 'https://test-inky-five-64.vercel.app/api/x402-proxy';
-  const network = process.env.X402_NETWORK || (isMainnet ? 'eip155:8453' : 'eip155:84532');
-  const x402Price = process.env.X402_PRICE || (isMainnet ? '$35.00' : '$1.00');
-  const x402Description = isMainnet
-    ? 'Buy the "My Agent Bought Me This" embroidered hat — $35.00 USDC on Base'
-    : 'Buy the "My Agent Bought Me This" embroidered hat — $1.00 USDC on Base Sepolia (testnet)';
 
   try {
     const { paymentMiddleware, x402ResourceServer } = require('@x402/express');

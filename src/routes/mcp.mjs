@@ -19,14 +19,10 @@ const { isValidPromoCode } = require('../lib/promos.js');
 const BASE_URL = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
 const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
 
-// Mirrors X402_ENV logic from index.js so tool descriptions stay in sync
-const X402_ENV = (process.env.X402_ENV || 'testnet').toLowerCase();
-const isMainnet = X402_ENV === 'mainnet';
-const x402Price = process.env.X402_PRICE || (isMainnet ? '$35.00' : '$1.00');
-const x402NetworkLabel = isMainnet ? 'Base' : 'Base Sepolia (testnet)';
-const x402UsdcAddress = isMainnet
-  ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  // Base mainnet USDC
-  : '0x036CbD53842c5426634e7929541eC2318f3dCF7e'; // Base Sepolia USDC
+// Pricing from the single source of truth (lib/pricing) so tool text matches the
+// actual /checkout charge.
+const { getPricing } = require('../lib/pricing.js');
+const { priceStr: x402Price, networkLabel: x402NetworkLabel, usdcAddress: x402UsdcAddress } = getPricing();
 
 // Helper — handles non-JSON 402 bodies gracefully and captures x402 payment header
 async function api(path, { method = 'GET', body, apiKey } = {}) {
