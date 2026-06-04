@@ -73,9 +73,9 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '10kb' }));
 
-// Serve static files (llms.txt, /.well-known/)
-app.use(express.static(path.join(__dirname, '..', 'public')));
-app.use('/.well-known', express.static(path.join(__dirname, '..', 'public', '.well-known')));
+// Dynamic /.well-known routes are registered BEFORE express.static so a stale static
+// file (e.g. an old hardcoded payment-manifest.json) can never shadow them — that
+// shadowing is what let the old $35 manifest leak out while /checkout charged $1.
 
 // OpenAPI spec (GPT action auto-config)
 app.get('/.well-known/openapi.json', (req, res) => {
@@ -114,6 +114,11 @@ app.get('/.well-known/payment-manifest.json', (req, res) => {
   });
 });
 
+// Serve remaining static files (llms.txt, agent.json, etc.). Mounted AFTER the dynamic
+// routes above so it only handles files that aren't dynamically generated.
+app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use('/.well-known', express.static(path.join(__dirname, '..', 'public', '.well-known')));
+
 // Validate POST /checkout fields BEFORE x402 fires so payment never settles on invalid input.
 // Requests that fail here return 400 without touching the x402 middleware.
 // Valid requests fall through to x402 (which issues a 402 challenge if unpaid,
@@ -124,6 +129,17 @@ app.post('/checkout', async (req, res, next) => {
   // skips the x402 middleware entirely, so no payment is ever taken.
   if ((process.env.STORE_OPEN || 'true').toLowerCase().trim() === 'false') {
     return res.status(503).json({ error: 'store_closed', message: 'The store is temporarily closed. Check back soon.' });
+  }
+
+  // x402 discovery: a request without a payment header is asking for the 402 challenge
+  // (payment requirements), not placing an order — standard x402 clients probe this way and
+  // may not send a body yet. Fall through to the x402 middleware so it issues the 402.
+  // The PAID retry carries the payment header and re-runs every gate below BEFORE settlement,
+  // so we still never settle USDC on invalid input. Check BOTH header names (v2
+  // PAYMENT-SIGNATURE and v1 X-PAYMENT) so a paid v2 request can never skip validation —
+  // mirrors the detection in lib/x402-payment.js.
+  if (!req.get('payment-signature') && !req.get('x-payment')) {
+    return next();
   }
 
   const { sku, name, email, address } = req.body || {};
