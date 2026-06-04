@@ -9,6 +9,7 @@ const { sendOrderConfirmation } = require('../lib/email');
 const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
 const { generateOrderId } = require('../lib/keys');
 const { getProduct, listSkus } = require('../lib/products');
+const { getPricing } = require('../lib/pricing');
 const auth = require('../middleware/auth');
 
 const DAILY_ORDER_LIMIT = 2;
@@ -85,7 +86,9 @@ router.post('/', auth, async (req, res) => {
     let paymentIntent;
     try {
       paymentIntent = await stripe.paymentIntents.create({
-        amount: product.priceUsd * 100,
+        // Single source of truth (lib/pricing) — same value the x402 rail charges,
+        // so the Stripe and x402 prices can never drift.
+        amount: Math.round(getPricing().priceUsd * 100),
         currency: 'usd',
         customer: customer.stripe_customer_id,
         payment_method: paymentMethodId,

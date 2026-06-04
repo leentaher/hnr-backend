@@ -488,6 +488,14 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
+const { checkShopifyPriceConsistency } = require('./lib/price-guardrail');
 initDb()
+  // Verify Shopify's price agrees with the x402 charge before we serve traffic. Returns
+  // normally (logs a warning) unless STRICT_PRICE_CHECK=true and a real drift is found,
+  // in which case it throws and we fail closed. Shopify outages are non-fatal (see lib).
+  .then(() => checkShopifyPriceConsistency().catch(err => {
+    console.error('[startup] price guardrail failed (strict mode):', err.message);
+    process.exit(1);
+  }))
   .then(() => app.listen(PORT, () => console.log(`Human Not Required API running on port ${PORT}`)))
   .catch(err => { console.error('[startup] DB init failed:', err.message); process.exit(1); });
