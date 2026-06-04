@@ -112,8 +112,8 @@ router.post('/', async (req, res) => {
     console.warn('[checkout] Failed to persist order record (non-fatal):', err.message);
   }
 
-  // Daily rate-limit counter (keyed on email today; T3 moves this to the payer wallet).
-  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
+  // Daily rate-limit counter (keyed on email). OFF by default — set X402_DAILY_LIMIT=N to enable.
+  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '0', 10);
   if (dailyLimit > 0) {
     incrementX402RateLimit(email).catch(err =>
       console.warn('[checkout] Failed to increment rate limit counter (non-fatal):', err.message)
@@ -126,7 +126,7 @@ router.post('/', async (req, res) => {
     sku,
     shopify_order_id: shopifyOrderId,
     payment: 'x402_usdc_base',
-    message: 'Order placed. USDC payment is being captured on Base.',
+    message: 'Payment settled on Base. Your hat is on the way.',
   });
 });
 

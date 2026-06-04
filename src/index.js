@@ -233,7 +233,8 @@ app.post('/checkout', async (req, res, next) => {
   req.body.email = email.toLowerCase();
   const normEmail = req.body.email;
 
-  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '2', 10);
+  // Daily per-email cap is OFF by default (0). Set X402_DAILY_LIMIT=N in prod to re-enable.
+  const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '0', 10);
   if (dailyLimit > 0) {
     try {
       const count = await getX402RateLimit(normEmail);
