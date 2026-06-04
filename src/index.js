@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const Stripe = require('stripe');
 const helmet = require('helmet');
 
 // Catch unhandled rejections so Railway logs show the real error instead of just crashing
@@ -9,17 +8,11 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[unhandledRejection]', reason);
 });
 
-const { initDb, getCustomerByEmail, getX402RateLimit } = require('./lib/db');
+const { initDb, getX402RateLimit } = require('./lib/db');
 const { getProduct } = require('./lib/products');
-const registerRouter = require('./routes/register');
 const ordersRouter = require('./routes/orders');
 const checkoutRouter = require('./routes/checkout');
 const emailRouter = require('./routes/email');
-
-// Stripe client — only instantiated when Stripe is enabled.
-// Instantiating with undefined throws in Stripe SDK v14+, so guard it here.
-const stripeEnabled = (process.env.ENABLE_STRIPE || 'true').toLowerCase().trim() !== 'false';
-const stripe = stripeEnabled ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 // Validate wallet address at startup before accepting any payments
 if (process.env.STORE_WALLET_ADDRESS && !/^0x[0-9a-fA-F]{40}$/.test(process.env.STORE_WALLET_ADDRESS)) {
@@ -37,13 +30,6 @@ app.use(helmet({
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 }));
-
-// Tighten headers on the two HTML pages where a browser loads a real page
-app.use(['/setup-complete', '/setup-cancel'], (req, res, next) => {
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
-  next();
-});
 
 // CORS — restrict to configured origins (defaults to APP_URL for the setup flow).
 // For a pure agent API no browser clients need CORS at all; this keeps the setup
@@ -372,19 +358,13 @@ if (x402Active) {
   }));
 }
 
-console.log(`[stripe] ENABLE_STRIPE="${process.env.ENABLE_STRIPE}" → stripeEnabled=${stripeEnabled}`);
-// GET /orders/skus is always available regardless of Stripe flag
-// ordersRouter handles its own 404s for Stripe-only endpoints when stripeEnabled=false
+// x402-only store: the only order rail is POST /checkout. ordersRouter now serves
+// just GET /orders/skus (the public product catalog).
 app.use('/orders', ordersRouter);
 
-if (stripeEnabled) {
-  app.use('/register', registerRouter);
-  app.use('/email', emailRouter);
-  console.log('[stripe] Stripe flow enabled');
-} else {
-  app.use('/register', (req, res) => res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. See /checkout.' }));
-  console.log('[stripe] Stripe flow disabled (ENABLE_STRIPE=false)');
-}
+// Admin-only order-confirmation resend (Shopify + Resend, gated by X-Admin-Secret).
+// Not part of the payment rail — safe to serve in the x402-only store.
+app.use('/email', emailRouter);
 
 // MCP HTTP endpoint — loaded via dynamic import (SDK is ESM-only)
 // Register placeholder synchronously so it sits BEFORE the 404 handler
@@ -398,65 +378,6 @@ import('./routes/mcp.mjs').then(({ createMcpRouter }) => {
 app.use('/mcp', (req, res, next) => {
   if (mcpRouter) return mcpRouter(req, res, next);
   res.status(503).json({ error: 'mcp_starting', message: 'MCP server is starting, try again in a moment.' });
-});
-
-// Rate limit for /setup (in-memory, per IP)
-const setupAttempts = new Map();
-
-// Prune IPs that haven't hit /setup in the last minute — prevents unbounded Map growth
-setInterval(() => {
-  const cutoff = Date.now() - 60_000;
-  for (const [ip, times] of setupAttempts.entries()) {
-    const fresh = times.filter(t => t > cutoff);
-    if (fresh.length === 0) setupAttempts.delete(ip);
-    else setupAttempts.set(ip, fresh);
-  }
-}, 5 * 60_000).unref(); // unref so it doesn't keep the process alive during tests
-
-// GET /setup?email=... — browser-friendly card setup (creates fresh Stripe session and redirects)
-app.get('/setup', async (req, res) => {
-  // x402-only: no card setup exists. Guard before touching the (null) Stripe client.
-  if (!stripeEnabled) {
-    return res.status(404).json({ error: 'not_available', message: 'This store uses x402 USDC payments only. No card setup needed — see /checkout.' });
-  }
-  // Rate limit: 5 attempts per IP per minute
-  const ip = req.ip;
-  const now = Date.now();
-  const attempts = (setupAttempts.get(ip) || []).filter(t => now - t < 60_000);
-  if (attempts.length >= 5) {
-    return res.status(429).send('Too many requests. Try again in a minute.');
-  }
-  setupAttempts.set(ip, [...attempts, now]);
-
-  const email = req.query.email;
-  if (!email) return res.status(400).send('Missing email parameter. Use /setup?email=you@example.com');
-
-  const foundCustomer = await getCustomerByEmail(email);
-  if (!foundCustomer) return res.status(404).send('Email not registered. Use POST /register first.');
-
-  try {
-    const appUrl = process.env.APP_URL || 'https://web-production-77376.up.railway.app';
-    const session = await stripe.checkout.sessions.create({
-      mode: 'setup',
-      customer: foundCustomer.stripe_customer_id,
-      payment_method_types: ['card'],
-      success_url: `${appUrl}/setup-complete`,
-      cancel_url: `${appUrl}/setup-cancel`,
-    });
-    res.redirect(session.url);
-  } catch (err) {
-    console.error('[setup] Stripe error:', err.message);
-    res.status(502).send('Card setup unavailable. Please try again later.');
-  }
-});
-
-// Card setup confirmation pages (Stripe redirects here after setup)
-app.get('/setup-complete', (req, res) => {
-  res.send(`<!DOCTYPE html><html><head><title>Card Saved</title><style>body{background:#1C1C1E;color:#00FF41;font-family:'Courier New',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><p style="font-size:2rem">✓</p><h1>Card saved.</h1><p>Your agent can now shop autonomously.</p><p style="color:#888;font-size:.9rem">You will receive a receipt for every purchase.</p></div></body></html>`);
-});
-
-app.get('/setup-cancel', (req, res) => {
-  res.send(`<!DOCTYPE html><html><head><title>Setup Cancelled</title><style>body{background:#1C1C1E;color:#FF3D8F;font-family:'Courier New',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}</style></head><body><div><h1>Setup cancelled.</h1><p>No card saved. Your agent cannot place orders yet.</p><p style="color:#888;font-size:.9rem">Ask your agent to re-send the setup link when you're ready.</p></div></body></html>`);
 });
 
 // Health check

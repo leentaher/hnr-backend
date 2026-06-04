@@ -1,5 +1,4 @@
 const { Pool } = require('pg');
-const { hashApiKey } = require('./keys');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -93,90 +92,6 @@ async function initDb() {
   console.log('[db] Tables ready');
 }
 
-// Customers
-async function getCustomerByKey(apiKey) {
-  const r = await pool.query('SELECT * FROM customers WHERE api_key = $1', [hashApiKey(apiKey)]);
-  return r.rows[0] || null;
-}
-
-async function getCustomerByEmail(email) {
-  const r = await pool.query('SELECT * FROM customers WHERE email = $1', [email]);
-  return r.rows[0] || null;
-}
-
-async function rotateApiKey(email, newApiKey) {
-  await pool.query(
-    'UPDATE customers SET api_key = $1 WHERE email = $2',
-    [hashApiKey(newApiKey), email.toLowerCase().trim()]
-  );
-}
-
-async function createCustomer({ apiKey, stripeCustomerId, email, name, address, freeOrders = 0 }) {
-  await pool.query(
-    'INSERT INTO customers (api_key, stripe_customer_id, email, name, address, free_orders_remaining) VALUES ($1, $2, $3, $4, $5, $6)',
-    [hashApiKey(apiKey), stripeCustomerId, email, name, JSON.stringify(address), freeOrders]
-  );
-}
-
-async function isPromoUsed(code, email, maxUses = 1) {
-  const total = await pool.query('SELECT COUNT(*) FROM used_promos WHERE code = $1',
-    [code.toUpperCase().trim()]);
-  if (parseInt(total.rows[0].count, 10) >= maxUses) return true;
-  return false;
-}
-
-async function markPromoUsed(code, email) {
-  await pool.query(
-    'INSERT INTO used_promos (code, email, used_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-    [code.toUpperCase().trim(), email.toLowerCase().trim(), new Date().toISOString()]
-  );
-}
-
-// Atomically claims one order slot for today, returns the new orders_today count or null if limit reached.
-// Safe under concurrent requests — the WHERE clause prevents over-counting.
-async function claimOrderSlot(apiKey, dailyLimit) {
-  const today = new Date().toISOString().slice(0, 10);
-  const r = await pool.query(
-    `UPDATE customers SET
-       orders_today = CASE WHEN last_order_date = $1 THEN orders_today + 1 ELSE 1 END,
-       last_order_date = $1
-     WHERE api_key = $2
-       AND (last_order_date IS DISTINCT FROM $1 OR orders_today < $3)
-     RETURNING orders_today`,
-    [today, apiKey, dailyLimit]
-  );
-  return r.rows[0]?.orders_today ?? null; // null = limit already reached
-}
-
-// Releases a previously claimed order slot (e.g. when payment fails after claimOrderSlot).
-// Decrements orders_today only if last_order_date is still today — prevents undercounting on day rollover.
-async function releaseOrderSlot(apiKey) {
-  const today = new Date().toISOString().slice(0, 10);
-  await pool.query(
-    `UPDATE customers SET orders_today = GREATEST(orders_today - 1, 0)
-     WHERE api_key = $1 AND last_order_date = $2 AND orders_today > 0`,
-    [apiKey, today]
-  );
-}
-
-async function decrementFreeOrder(apiKey) {
-  await pool.query(
-    'UPDATE customers SET free_orders_remaining = free_orders_remaining - 1 WHERE api_key = $1 AND free_orders_remaining > 0',
-    [apiKey]
-  );
-}
-
-async function incrementOrderCount(apiKey) {
-  const today = new Date().toISOString().slice(0, 10);
-  await pool.query(
-    `UPDATE customers SET
-       orders_today = CASE WHEN last_order_date = $1 THEN orders_today + 1 ELSE 1 END,
-       last_order_date = $1
-     WHERE api_key = $2`,
-    [today, apiKey]
-  );
-}
-
 // Orders
 async function createOrder({ orderId, apiKey, sku, stripePaymentIntentId, shopifyOrderId }) {
   await pool.query(
@@ -257,4 +172,4 @@ async function incrementX402RateLimit(email) {
   return r.rows[0].count; // new count after increment
 }
 
-module.exports = { initDb, getCustomerByKey, getCustomerByEmail, createCustomer, rotateApiKey, claimOrderSlot, releaseOrderSlot, incrementOrderCount, createOrder, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, isPromoUsed, markPromoUsed, decrementFreeOrder, getX402RateLimit, incrementX402RateLimit };
+module.exports = { initDb, createOrder, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, getX402RateLimit, incrementX402RateLimit };

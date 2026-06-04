@@ -5,7 +5,7 @@ const PRODUCTS = {
     label: 'My Agent Bought Me This — Embroidered Hat',
     size: 'One Size',
     // Price is NOT stored per-product — it comes from lib/pricing (single source of
-    // truth) so x402, the Stripe rail, and /orders/skus can never disagree.
+    // truth) so the x402 /checkout charge and /orders/skus can never disagree.
     shopifyVariantId: '44665203589206',
   },
 };

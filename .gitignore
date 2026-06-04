@@ -2,3 +2,7 @@ node_modules/
 .env
 *.log
 .gstack/
+node_modules/
+.env
+.env.*
+*.log

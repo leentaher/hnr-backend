@@ -1,6 +1,6 @@
 /**
- * QA regression tests for the 6 security/reliability fixes.
- * No external deps — uses Node built-in assert only.
+ * QA regression tests for the x402 checkout validation, /email admin auth, and
+ * CORS fixes. No external deps — uses Node built-in assert only.
  * Run: node test-qa-fixes.mjs
  */
 
@@ -121,85 +121,6 @@ test('missing address fields caught', () => {
   assert.equal(result.error, 'needs_address');
 });
 
-// ─── Fix 2: claimOrderSlot SQL logic ─────────────────────────────────────────
-
-console.log('\nFix 2: claimOrderSlot atomic logic (SQL semantics simulation)');
-
-// Simulate the DB state machine that the SQL UPDATE implements
-function simulateClaimOrderSlot(state, today, dailyLimit) {
-  const { last_order_date, orders_today } = state;
-  // Simulate WHERE clause: last_order_date IS DISTINCT FROM today OR orders_today < limit
-  const datesDiffer = last_order_date !== today;
-  const underLimit = orders_today < dailyLimit;
-  if (!datesDiffer && !underLimit) return null; // limit reached
-
-  const newCount = datesDiffer ? 1 : orders_today + 1;
-  return newCount;
-}
-
-const TODAY = '2026-06-02';
-
-test('first order of the day (fresh customer) gets slot 1', () => {
-  const result = simulateClaimOrderSlot({ last_order_date: null, orders_today: 0 }, TODAY, 2);
-  assert.equal(result, 1);
-});
-
-test('second order of the day gets slot 2', () => {
-  const result = simulateClaimOrderSlot({ last_order_date: TODAY, orders_today: 1 }, TODAY, 2);
-  assert.equal(result, 2);
-});
-
-test('third order rejected when limit=2', () => {
-  const result = simulateClaimOrderSlot({ last_order_date: TODAY, orders_today: 2 }, TODAY, 2);
-  assert.equal(result, null);
-});
-
-test('new day resets counter even if yesterday had 5 orders', () => {
-  const result = simulateClaimOrderSlot({ last_order_date: '2026-06-01', orders_today: 5 }, TODAY, 2);
-  assert.equal(result, 1);
-});
-
-test('concurrent requests: second sees incremented count, fails limit', () => {
-  // Simulate request A claiming slot first
-  const stateAfterA = { last_order_date: TODAY, orders_today: 2 }; // A incremented to 2
-  // Request B now sees orders_today=2, limit=2
-  const resultB = simulateClaimOrderSlot(stateAfterA, TODAY, 2);
-  assert.equal(resultB, null, 'B should be rejected after A claimed last slot');
-});
-
-// ─── Fix 3: releaseOrderSlot logic ───────────────────────────────────────────
-
-console.log('\nFix 3: releaseOrderSlot (slot returned on payment failure)');
-
-function simulateReleaseOrderSlot(state, today) {
-  // WHERE last_order_date = today AND orders_today > 0
-  if (state.last_order_date !== today || state.orders_today <= 0) return state;
-  return { ...state, orders_today: Math.max(state.orders_today - 1, 0) };
-}
-
-test('releasing a slot decrements orders_today', () => {
-  const after = simulateReleaseOrderSlot({ last_order_date: TODAY, orders_today: 1 }, TODAY);
-  assert.equal(after.orders_today, 0);
-});
-
-test('release does not go below 0', () => {
-  const after = simulateReleaseOrderSlot({ last_order_date: TODAY, orders_today: 0 }, TODAY);
-  assert.equal(after.orders_today, 0);
-});
-
-test('release is a no-op if date has rolled over', () => {
-  const state = { last_order_date: '2026-06-01', orders_today: 1 };
-  const after = simulateReleaseOrderSlot(state, TODAY);
-  assert.equal(after.orders_today, 1, 'stale slot should not be decremented');
-});
-
-test('claim then release leaves counter unchanged', () => {
-  const initial = { last_order_date: TODAY, orders_today: 0 };
-  const afterClaim = { ...initial, orders_today: simulateClaimOrderSlot(initial, TODAY, 2) };
-  const afterRelease = simulateReleaseOrderSlot(afterClaim, TODAY);
-  assert.equal(afterRelease.orders_today, 0);
-});
-
 // ─── Fix 4: ADMIN_SECRET fail-closed ─────────────────────────────────────────
 
 console.log('\nFix 4: ADMIN_SECRET fail-closed');
@@ -230,28 +151,6 @@ test('ADMIN_SECRET set, wrong header → 401', () => {
 test('ADMIN_SECRET set, correct header → authorized', () => {
   const result = checkAdminAuth('supersecret', 'supersecret');
   assert.equal(result, null);
-});
-
-// ─── Fix 5: Email normalization (markPromoUsed) ───────────────────────────────
-
-console.log('\nFix 5: Email normalization');
-
-function normalizePromoEmail(email) {
-  return email.toLowerCase().trim();
-}
-
-test('markPromoUsed normalizes email to lowercase', () => {
-  assert.equal(normalizePromoEmail('User@Example.COM'), 'user@example.com');
-});
-
-test('isPromoUsed and markPromoUsed match on case variants', () => {
-  const stored = normalizePromoEmail('Agent@COMPANY.com');
-  const queried = 'agent@company.com'.toLowerCase().trim();
-  assert.equal(stored, queried);
-});
-
-test('whitespace is trimmed from email', () => {
-  assert.equal(normalizePromoEmail('  user@example.com  '), 'user@example.com');
 });
 
 // ─── Fix 6: CORS — no wildcard with Authorization ────────────────────────────

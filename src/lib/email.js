@@ -12,51 +12,8 @@ function getTransporter() {
   return transporter;
 }
 
-async function sendApiKeyEmail({ to, apiKey }) {
-  const t = getTransporter();
-  if (!t) {
-    console.warn('[email] Skipping — EMAIL_FROM/EMAIL_PASS not configured');
-    return;
-  }
-  await t.sendMail({
-    from: process.env.EMAIL_FROM,
-    to,
-    subject: 'Your agent is ready to shop',
-    text: [
-      'Your AI agent API key:',
-      '',
-      `  ${apiKey}`,
-      '',
-      'Your agent will use this key to buy merch on your behalf.',
-      'You\'ll receive a Stripe receipt for every purchase.',
-      '',
-      '— Human Not Required',
-    ].join('\n'),
-  });
-}
-
-async function sendCardSetupEmail({ to, setupUrl }) {
-  const t = getTransporter();
-  if (!t) {
-    console.warn('[email] Skipping card setup email — EMAIL_FROM/EMAIL_PASS not configured');
-    return;
-  }
-  await t.sendMail({
-    from: process.env.EMAIL_FROM,
-    to,
-    subject: 'One last step: save your card so your agent can shop',
-    text: [
-      'Your agent is registered. To let it buy merch for you, save a payment method:',
-      '',
-      `  ${setupUrl}`,
-      '',
-      'This link never expires. You only need to do this once.',
-      '',
-      '— Human Not Required',
-    ].join('\n'),
-  });
-}
-
+// sendOrderConfirmation is used by the x402 checkout flow to alert the store owner
+// when a Shopify order creation fails after payment authorization (see checkout.js).
 async function sendOrderConfirmation({ to, subject, html }) {
   const t = getTransporter();
   if (!t) {
@@ -66,4 +23,4 @@ async function sendOrderConfirmation({ to, subject, html }) {
   await t.sendMail({ from: process.env.EMAIL_FROM, to, subject, html });
 }
 
-module.exports = { sendApiKeyEmail, sendCardSetupEmail, sendOrderConfirmation };
+module.exports = { sendOrderConfirmation };
