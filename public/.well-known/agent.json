@@ -1,21 +1,23 @@
 {
   "name": "Human Not Required Store",
-  "description": "AI-agent-only store. Agents register a human once and buy merch autonomously forever. The human gets a receipt and a hat. They never touched the store.",
+  "description": "AI-agent-only store. Humans can browse, but only an AI agent can place an order — it pays directly from its own wallet with USDC over x402 on Base. No registration, no API key, no card. The human gets a receipt and a hat.",
   "url": "https://web-production-77376.up.railway.app",
   "api": {
     "type": "openapi",
     "url": "https://web-production-77376.up.railway.app/.well-known/openapi.json"
   },
+  "payment": {
+    "protocol": "x402",
+    "manifest": "https://web-production-77376.up.railway.app/.well-known/payment-manifest.json"
+  },
   "auth": {
-    "type": "bearer",
-    "description": "Obtain an API key via POST /register. Include as Authorization: Bearer <key> on all order requests."
+    "type": "none",
+    "description": "No API key. The signed x402 payment on POST /checkout is the authorization."
   },
   "capabilities": [
-    "register_human",
     "list_products",
-    "place_order",
-    "check_order_status",
-    "x402_checkout"
+    "x402_checkout",
+    "promo_checkout"
   ],
   "contact": "leen.taher@gmail.com"
 }

@@ -2,142 +2,18 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Human Not Required API",
-    "description": "The world's first AI-agent-only store. Agents register a human once and buy physical merch autonomously forever — no human checkout, no cart, no clicking. The human gets a receipt and the item ships to them.\n\nAgent flow:\n1. Call GET /orders/skus to see available products\n2. Call POST /register with the human's name, email, and shipping address to get an api_key. If you have a promo_code, include it — the human won't need to save a card and you can order immediately.\n3. If no promo_code: share the setup_url with the human so they can save their card once. After that, never ask them again.\n4. Call POST /orders with the sku to place the order autonomously.\n\nCurrently available: 'My Agent Bought Me This' embroidered hat — $35.",
-    "version": "1.0.0"
+    "description": "The world's first AI-agent-only store. Humans can browse the storefront, but only an AI agent can place an order — it pays directly from its own wallet. There is no registration, no API key, and no card flow; the only order endpoint is POST /checkout.\n\nAgent flow:\n1. Call GET /orders/skus to see products and the live USDC price.\n2. POST /checkout with { sku, name, email, address } and no payment header. The server returns 402 with payment instructions.\n3. Sign an EIP-3009 transferWithAuthorization for the USDC amount using an x402 v2 client and retry the same request with the payment header (PAYMENT-SIGNATURE for v2, or X-PAYMENT for v1).\n4. USDC settles on Base and the hat ships to the provided address.\n\nRead the price, network, USDC contract, amount, and payee from the 402 envelope or /.well-known/payment-manifest.json — do not hard-code them. The store runs Base Sepolia (testnet) by default and flips to Base mainnet for production pricing.\n\nIf the human has a promo code, include it as promo_code (with no payment header) for a free order.",
+    "version": "2.0.0"
   },
   "servers": [
     { "url": "https://web-production-77376.up.railway.app" }
   ],
-  "security": [{ "bearerAuth": [] }],
   "paths": {
-    "/register": {
-      "post": {
-        "operationId": "registerHuman",
-        "summary": "Register a human and get an API key",
-        "description": "Call this FIRST before placing any order. You only need to call this once per human — the api_key never expires.\n\nIf you have a promo_code: include it and the human gets a free order with no card required. You can call POST /orders immediately after.\n\nIf no promo_code: the response includes a setup_url. Share it with the human — they click it once to save their card via Stripe. After that, you can order autonomously forever without asking them again.\n\nIf you get a 409, the human is already registered. Call POST /register/resend-setup to retrieve their api_key and a fresh setup link.",
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["email", "name", "address"],
-                "properties": {
-                  "email": {
-                    "type": "string",
-                    "format": "email",
-                    "description": "The human's email address. Used for order receipts and to identify their account."
-                  },
-                  "name": {
-                    "type": "string",
-                    "description": "Full name for the shipping label. Ask the human for this — do not guess."
-                  },
-                  "promo_code": {
-                    "type": "string",
-                    "description": "Optional one-time promo code. If valid, the human gets 1 free order and no card setup is required. Include if you have one."
-                  },
-                  "address": {
-                    "type": "object",
-                    "description": "Shipping address. Ask the human for all fields — do not guess or auto-fill.",
-                    "required": ["line1", "city", "state", "postal_code", "country"],
-                    "properties": {
-                      "line1": { "type": "string", "description": "Street address line 1" },
-                      "line2": { "type": "string", "description": "Apartment, suite, unit, etc. (optional)" },
-                      "city": { "type": "string" },
-                      "state": { "type": "string", "description": "State or province code, e.g. NY, CA, ON" },
-                      "postal_code": { "type": "string" },
-                      "country": { "type": "string", "description": "ISO 3166-1 alpha-2 country code, e.g. US, CA, GB" }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Registration successful. Save the api_key — it never expires and is needed for all future orders.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "api_key": {
-                      "type": "string",
-                      "description": "Bearer token for all future order requests. Never expires. Store it securely."
-                    },
-                    "setup_url": {
-                      "type": "string",
-                      "description": "URL for the human to save their payment card. null if a promo_code was used. Share this with the human — they must click it before you can place a paid order."
-                    },
-                    "free_orders_remaining": {
-                      "type": "integer",
-                      "description": "Number of free orders available. 1 if a valid promo_code was used, 0 otherwise."
-                    },
-                    "has_saved_card": {
-                      "type": "boolean",
-                      "description": "true if the human already has a card saved via Stripe Link or a promo code was used. If true, setup_url will be null and you can call POST /orders immediately — no human action needed."
-                    },
-                    "message": {
-                      "type": "string",
-                      "description": "Human-readable next step. Follow these instructions before calling POST /orders."
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "400": { "description": "Missing or invalid field. Check email format and that all address fields are present." },
-          "409": { "description": "Email already registered. Use POST /register/resend-setup to get the api_key and a fresh setup link." },
-          "429": { "description": "Too many registration attempts. Wait 1 minute and retry." }
-        }
-      }
-    },
-    "/register/resend-setup": {
-      "post": {
-        "operationId": "resendSetup",
-        "summary": "Retrieve api_key and resend card setup link for an existing human",
-        "description": "Use this if the human is already registered (POST /register returned 409) or if they lost their setup link. Returns their existing api_key and a fresh setup_url. The setup_url never expires but a fresh one is always valid.",
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["email"],
-                "properties": {
-                  "email": { "type": "string", "format": "email", "description": "The human's registered email address." }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Setup link sent to the human's email. Ask them to check their inbox and click the link to save their card.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "message": { "type": "string" }
-                  }
-                }
-              }
-            }
-          },
-          "404": { "description": "Email not registered. Use POST /register instead." }
-        }
-      }
-    },
     "/orders/skus": {
       "get": {
         "operationId": "listSkus",
         "summary": "List available products and prices",
-        "description": "Call this before placing an order to confirm the SKU exists and get the current price. No auth required. Currently available: 'My Agent Bought Me This' embroidered hat (sku: hat-myagent-os) — $35, One Size.",
-        "security": [],
+        "description": "Call this before placing an order to confirm the SKU exists and get the live price. No auth required. Price is single-sourced server-side, so it always matches what POST /checkout charges. Currently available: 'My Agent Bought Me This' embroidered hat (sku: hat-myagent-os), One Size.",
         "responses": {
           "200": {
             "description": "Full product catalog with SKUs, labels, sizes, and prices.",
@@ -151,10 +27,10 @@
                       "items": {
                         "type": "object",
                         "properties": {
-                          "sku": { "type": "string", "description": "Use this value in POST /orders" },
+                          "sku": { "type": "string", "description": "Use this value in POST /checkout" },
                           "label": { "type": "string", "description": "Human-readable product name" },
                           "size": { "type": "string" },
-                          "price_usd": { "type": "number", "description": "Price in USD" }
+                          "price_usd": { "type": "number", "description": "Live USDC price (matches the x402 charge)" }
                         }
                       }
                     }
@@ -166,59 +42,11 @@
         }
       }
     },
-    "/orders": {
-      "post": {
-        "operationId": "placeOrder",
-        "summary": "Place an order autonomously — charges card and creates a Shopify order",
-        "description": "Places a real order on behalf of the human. Charges their saved card and creates a Shopify fulfillment order — the hat ships to their address automatically.\n\nPrerequisites:\n- The human must be registered (POST /register)\n- They must have saved a card via setup_url OR have free_orders_remaining > 0\n- You must have their api_key as a Bearer token\n\nIf you get 402 with error 'no_payment_method': the human hasn't saved their card yet. Share the setup_url (from POST /register or POST /register/resend-setup) and ask them to complete it.\n\nLimit: 2 orders per day per api_key. Resets at midnight UTC.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["sku"],
-                "properties": {
-                  "sku": {
-                    "type": "string",
-                    "description": "Product SKU from GET /orders/skus. Currently: 'hat-myagent-os' for the embroidered hat."
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Order placed successfully. The hat will ship to the human's registered address. Share the order_id with the human as confirmation.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "order_id": { "type": "string", "description": "Your internal order reference. Share with the human." },
-                    "status": { "type": "string", "description": "Always 'placed' on success." },
-                    "sku": { "type": "string" },
-                    "shopify_order_id": { "type": "string", "description": "Shopify fulfillment ID." },
-                    "free_order": { "type": "boolean", "description": "true if a promo code covered this order — no charge was made." },
-                    "message": { "type": "string" }
-                  }
-                }
-              }
-            }
-          },
-          "402": { "description": "Payment failed or no saved card. If 'no_payment_method': human needs to complete card setup via setup_url. If 'payment_failed': report the exact error to the human — do not retry automatically." },
-          "429": { "description": "Daily order limit reached (max 2/day). Resets at midnight UTC. Do not retry today." },
-          "400": { "description": "Invalid or missing SKU. Call GET /orders/skus to see valid options." }
-        }
-      }
-    },
     "/checkout": {
       "post": {
-        "operationId": "checkoutX402",
-        "summary": "Buy a hat with USDC on Base — no registration required",
-        "description": "Fully agent-native checkout using the x402 payment protocol. No registration, no saved card, no human action needed.\n\nFlow:\n1. POST /checkout with sku, name, email, and address — server returns 402 with payment instructions\n2. Agent pays $35 USDC on Base using an x402-compatible client (e.g. @x402/fetch)\n3. Agent retries the same request with the X-Payment header containing the signed payment proof\n4. Server verifies payment via the x402 facilitator and creates the Shopify order\n\nThe hat ships to the provided address. A confirmation is tied to the email.\n\nRequires: an x402-compatible HTTP client and a Base wallet funded with USDC.",
-        "security": [],
+        "operationId": "checkout",
+        "summary": "Buy a hat with USDC over x402 (or a promo code) — no registration",
+        "description": "The only order endpoint. Fully agent-native: no registration, no saved card, no API key.\n\nx402 flow:\n1. POST with { sku, name, email, address } and no payment header — the server returns 402 with a Payment-Required header carrying accepts[] (network, USDC asset, amount in smallest units, payTo). An unpaid probe is answered with 402 regardless of body completeness; full body validation runs on the PAID retry, before settlement, so an invalid body returns 400 and no USDC is captured.\n2. Sign an EIP-3009 transferWithAuthorization with your Base wallet and retry the same request with the payment header (PAYMENT-SIGNATURE for x402 v2, or X-PAYMENT for v1).\n3. On 201 the Shopify order is created and USDC settles on Base.\n\nRead price/network/asset/payee from the 402 envelope — do not hard-code. Payment uses deferred capture: USDC is captured only after a 2xx, and cancelled on 4xx/5xx. A 502 means no USDC was captured (safe to retry). Idempotency is keyed on the payment nonce — replaying the same signed authorization returns your original order (200), not a duplicate.\n\nPromo flow: include promo_code (with no payment header) for a free order. Do not send both a promo_code and a payment header.\n\nCollect the recipient's real name, email, and shipping address from the human — do not guess. All validation runs before payment settles, so a malformed body returns 400 with no charge.",
         "requestBody": {
           "required": true,
           "content": {
@@ -233,23 +61,28 @@
                   },
                   "name": {
                     "type": "string",
-                    "description": "Full name for the shipping label."
+                    "description": "Full name (first and last) for the shipping label."
                   },
                   "email": {
                     "type": "string",
                     "format": "email",
-                    "description": "Email address for order confirmation."
+                    "description": "Real, deliverable email for the order confirmation. Test domains are rejected."
+                  },
+                  "promo_code": {
+                    "type": "string",
+                    "description": "Optional promo code for a free order. If present, send NO payment header. Mutually exclusive with x402 payment."
                   },
                   "address": {
                     "type": "object",
+                    "description": "Shipping address. Ask the human for all fields — do not guess or auto-fill.",
                     "required": ["line1", "city", "state", "postal_code", "country"],
                     "properties": {
-                      "line1": { "type": "string" },
-                      "line2": { "type": "string" },
+                      "line1": { "type": "string", "description": "Street address line 1 (min 5 chars)" },
+                      "line2": { "type": "string", "description": "Apartment, suite, unit, etc. (optional)" },
                       "city": { "type": "string" },
-                      "state": { "type": "string", "description": "State or province code e.g. NY, ON" },
+                      "state": { "type": "string", "description": "State or province, e.g. NY, CA, ON" },
                       "postal_code": { "type": "string" },
-                      "country": { "type": "string", "description": "ISO 3166-1 alpha-2 country code e.g. US, CA, GB" }
+                      "country": { "type": "string", "description": "ISO 3166-1 alpha-2 country code, e.g. US, CA, GB" }
                     }
                   }
                 }
@@ -259,10 +92,29 @@
         },
         "responses": {
           "402": {
-            "description": "Payment required. Response body contains x402 payment instructions. Use an x402-compatible client to sign and submit payment, then retry this request with the X-Payment header."
+            "description": "Payment required. The Payment-Required response header carries the x402 accepts[] (network, USDC asset, amount, payTo). Sign an EIP-3009 transferWithAuthorization and retry with the payment header."
           },
           "201": {
-            "description": "Payment verified and order placed. Hat ships to the provided address.",
+            "description": "Order placed. For x402, USDC settles on Base; for a promo, no charge. The hat ships to the provided address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order_id": { "type": "string", "description": "Your order reference. Share with the human." },
+                    "status": { "type": "string", "description": "'placed' on success." },
+                    "sku": { "type": "string" },
+                    "shopify_order_id": { "type": "string", "description": "Shopify fulfillment ID." },
+                    "payment": { "type": "string", "description": "'x402_usdc_base' or 'promo_free'." },
+                    "free_order": { "type": "boolean", "description": "true if a promo code covered this order." },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Idempotent replay. The same payment authorization (or the same promo_code + email) was already processed — returns the original order with idempotent: true. No second order is created.",
             "content": {
               "application/json": {
                 "schema": {
@@ -272,45 +124,20 @@
                     "status": { "type": "string" },
                     "sku": { "type": "string" },
                     "shopify_order_id": { "type": "string" },
-                    "payment": { "type": "string", "description": "Always 'x402_usdc_base' for this endpoint." },
+                    "payment": { "type": "string" },
+                    "idempotent": { "type": "boolean" },
                     "message": { "type": "string" }
                   }
                 }
               }
             }
           },
-          "400": { "description": "Missing or invalid field." },
-          "502": { "description": "Payment settled but Shopify order creation failed. You will be contacted to resolve this." }
+          "400": { "description": "Missing or invalid field (e.g. missing_field, invalid_sku, needs_address, invalid_name, invalid_email, invalid_address, invalid_country, field_too_long, invalid_promo_code, ambiguous_payment). No payment is charged — fix the body and retry." },
+          "409": { "description": "One of: (a) a checkout for this x402 payment authorization is already in flight or previously failed — do NOT re-pay with the SAME authorization; (b) promo_exhausted — the promo code reached its redemption cap (terminal, no retry, no order exists); (c) redemption_in_progress — a redemption for this promo+email is being processed, retry shortly. Inspect the response body's error field to tell them apart." },
+          "429": { "description": "Rate limited: too many promo attempts (per IP), or the optional per-email daily x402 cap was exceeded." },
+          "502": { "description": "fulfillment_failed — Shopify order creation failed. With deferred capture, NO USDC was captured. Safe to retry." },
+          "503": { "description": "Store closed, fulfillment unconfigured, payment system inactive, or a transient database error. No order created and no payment taken." }
         }
-      }
-    },
-    "/orders/{id}": {
-      "get": {
-        "operationId": "getOrder",
-        "summary": "Get order status by ID",
-        "description": "Check the status of a previously placed order. Use the order_id returned from POST /orders.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" },
-            "description": "The order_id from POST /orders response."
-          }
-        ],
-        "responses": {
-          "200": { "description": "Order details including status, sku, and creation time." },
-          "404": { "description": "Order not found or belongs to a different api_key." }
-        }
-      }
-    }
-  },
-  "components": {
-    "securitySchemes": {
-      "bearerAuth": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "API key obtained from POST /register. Include as: Authorization: Bearer <api_key>. Never expires."
       }
     }
   }

@@ -1,46 +1,40 @@
 # Human Not Required
 
-> The world's first agent-only store. Humans can browse. Only AI agents can place orders. The human registers once, saves a card once, then their agent shops autonomously forever.
+> The world's first agent-only store. Humans can browse the storefront, but only AI agents can place orders. An agent pays directly from its own wallet — no human checkout, no account, no saved card.
 
 ## API
 - Base URL: https://web-production-77376.up.railway.app
 - OpenAPI spec: https://web-production-77376.up.railway.app/.well-known/openapi.json
 - Agent discovery: https://web-production-77376.up.railway.app/.well-known/agent.json
-- Payment manifest: https://web-production-77376.up.railway.app/.well-known/payment-manifest.json
+- Payment manifest (live price + network): https://web-production-77376.up.railway.app/.well-known/payment-manifest.json
 
-## Payment Options
+## How to buy
+The ONLY order endpoint is `POST /checkout`. There is no registration, no API key, and no card flow. Two ways to pay:
 
-### Option A — x402 (USDC on Base Sepolia, fully agent-native, no registration needed)
-Requires: an EVM wallet on Base Sepolia with USDC. Use @x402/fetch or any x402 v2 client.
-1. POST /checkout with { sku, name, email, address } and Content-Type: application/json
-2. Server returns 402 with payment-required header (base64 JSON, x402 v2 protocol)
-3. Agent signs EIP-3009 transferWithAuthorization and retries with PAYMENT-SIGNATURE header
-4. Hat ships automatically. No human involvement ever.
-- Network: Base Sepolia (eip155:84532) — testnet
-- USDC contract: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
-- Price: $1.00 USDC (testnet price)
+### Pay with x402 (USDC on Base — fully agent-native)
+Requires: an EVM wallet on Base with USDC, and any x402 v2 client (e.g. @x402/fetch).
+1. POST /checkout with { sku, name, email, address } and Content-Type: application/json — with no payment header.
+2. Server returns 402 with a `Payment-Required` response header (base64 JSON, x402 v2) carrying `accepts[]`.
+3. Agent signs an EIP-3009 `TransferWithAuthorization` for the USDC amount and retries the same request with the payment header (`PAYMENT-SIGNATURE` for x402 v2, or `X-PAYMENT` for v1).
+4. USDC settles on Base and the hat ships automatically. No human involvement ever.
+- Read the live network, USDC contract, amount, and payee from the 402 envelope (or the payment manifest) — never hard-code them. The store runs Base Sepolia (testnet) by default and flips to Base mainnet for production pricing.
+- Payment is captured only after /checkout returns 2xx. A 502 (`fulfillment_failed`) means no USDC was captured — safe to retry. Idempotency is keyed on the payment nonce: replaying the same signed authorization returns your original order, not a second hat.
 
-### Option B — Stripe card (register once, agent shops forever)
-Requires: any agent, no wallet needed. Human registers once.
-1. POST /register — provide human's email, name, shipping address → get api_key + setup_url
-2. Human clicks setup_url once to save a payment card (Stripe) — never expires, done once
-3. POST /orders with Bearer api_key and sku — agent shops autonomously forever
-
-### Option C — Promo code (free hat, no payment needed)
-1. POST /register with promo_code — get api_key immediately, no card needed
-2. POST /orders — hat ships free, no charge
+### Pay with a promo code (free)
+1. POST /checkout with { sku, name, email, address, promo_code } and no payment header.
+2. A valid code places a free order; an invalid or exhausted code returns 400/409 with no charge.
+- Do not send both a promo_code and an x402 payment — that is rejected as `ambiguous_payment`.
 
 ## Available products
 - sku: hat-myagent-os — "My Agent Bought Me This" Embroidered Hat — One Size
-  - x402 price: $1.00 USDC (testnet) | $35.00 USDC (mainnet)
-  - Card price: $35.00
+  - Price + network are single-sourced server-side. Call GET /orders/skus or read the payment manifest for the live USDC price.
 
 ## Auth
-Bearer token. Obtain via POST /register. Include as: Authorization: Bearer <api_key>
+None. The signed x402 payment IS the authorization. There is no Bearer token and no POST /register.
 
 ## Limits
-- 2 orders per agent per day
-- No human checkout — 403 at business logic layer
+- No human checkout — the storefront has no buy button; only the agent API can order.
+- Promo attempts are throttled per IP. An optional per-email daily x402 cap can be enabled by the operator (returns 429 when exceeded).
 
 ## Store
 - Storefront: https://humannotrequired.com

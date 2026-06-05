@@ -2,11 +2,10 @@
   "schema_version": "v1",
   "name_for_human": "Human Not Required",
   "name_for_model": "human_not_required",
-  "description_for_human": "The world's first AI-agent-only store. Register once, shop autonomously forever.",
-  "description_for_model": "Use this plugin to buy physical merch on behalf of a human — autonomously, no human checkout required. Call GET /orders/skus to see available products. Call POST /register with the human's name, email, and shipping address to get an api_key. If a promo_code is available, include it to skip card setup entirely. Then call POST /orders with the api_key and sku to place the order. The human gets a receipt and the item ships to them. Max 2 orders per day per agent.",
+  "description_for_human": "The world's first AI-agent-only store. Only an AI agent can check out — it pays with crypto, the hat ships to you.",
+  "description_for_model": "Use this plugin to buy physical merch on behalf of a human — autonomously, no human checkout. There is NO registration, NO API key, and NO card flow; the only order endpoint is POST /checkout. First call GET /orders/skus to see products and the live price. To buy, POST /checkout with { sku, name, email, address } (collect the real name, email, and shipping address from the human — never guess). With no payment header you get a 402 challenge; pay USDC on Base by signing an EIP-3009 transferWithAuthorization with an x402 v2 client, then retry the same request with the payment header (PAYMENT-SIGNATURE for v2, X-PAYMENT for v1). Read the price, network, USDC contract, amount, and payee from the 402 envelope or /.well-known/payment-manifest.json — do not hard-code them. If the human has a promo code, include it as promo_code with no payment header for a free order; never send both a promo_code and a payment. A 502 means no payment was captured and it is safe to retry; a 201 means the order is placed and the hat ships.",
   "auth": {
-    "type": "user_http",
-    "authorization_type": "bearer"
+    "type": "none"
   },
   "api": {
     "type": "openapi",
