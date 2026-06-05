@@ -105,6 +105,27 @@ app.get('/.well-known/payment-manifest.json', (req, res) => {
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/.well-known', express.static(path.join(__dirname, '..', 'public', '.well-known')));
 
+// Per-IP throttle for promo attempts — blunts promo-code enumeration on the public /checkout
+// endpoint (responses differ for valid/invalid/exhausted codes, so unlimited tries would leak
+// which codes exist). In-memory per instance; use a shared store if you run multiple instances.
+const PROMO_ATTEMPTS_PER_MIN = parseInt(process.env.PROMO_ATTEMPTS_PER_MIN ?? '20', 10);
+const promoAttempts = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [ip, times] of promoAttempts.entries()) {
+    const fresh = times.filter(t => t > cutoff);
+    if (fresh.length === 0) promoAttempts.delete(ip);
+    else promoAttempts.set(ip, fresh);
+  }
+}, 5 * 60_000).unref();
+function promoRateLimited(ip) {
+  const now = Date.now();
+  const fresh = (promoAttempts.get(ip) || []).filter(t => now - t < 60_000);
+  if (fresh.length >= PROMO_ATTEMPTS_PER_MIN) return true;
+  promoAttempts.set(ip, [...fresh, now]);
+  return false;
+}
+
 // Validate POST /checkout fields BEFORE x402 fires so payment never settles on invalid input.
 // Requests that fail here return 400 without touching the x402 middleware.
 // Valid requests fall through to x402 (which issues a 402 challenge if unpaid,
@@ -117,6 +138,11 @@ app.post('/checkout', async (req, res, next) => {
     return res.status(503).json({ error: 'store_closed', message: 'The store is temporarily closed. Check back soon.' });
   }
 
+  // A promo request carries a promo_code and NO payment header. It is NOT an x402 discovery
+  // probe — it must run full validation and be fulfilled as a free order. So detect it here
+  // and do NOT short-circuit it into the x402 middleware below.
+  const hasPromo = !!(req.body && req.body.promo_code);
+
   // x402 discovery: a request without a payment header is asking for the 402 challenge
   // (payment requirements), not placing an order — standard x402 clients probe this way and
   // may not send a body yet. Fall through to the x402 middleware so it issues the 402.
@@ -124,7 +150,7 @@ app.post('/checkout', async (req, res, next) => {
   // so we still never settle USDC on invalid input. Check BOTH header names (v2
   // PAYMENT-SIGNATURE and v1 X-PAYMENT) so a paid v2 request can never skip validation —
   // mirrors the detection in lib/x402-payment.js.
-  if (!req.get('payment-signature') && !req.get('x-payment')) {
+  if (!hasPromo && !req.get('payment-signature') && !req.get('x-payment')) {
     return next();
   }
 
@@ -218,6 +244,23 @@ app.post('/checkout', async (req, res, next) => {
   address.country = address.country.toUpperCase();
   req.body.email = email.toLowerCase();
   const normEmail = req.body.email;
+
+  // Free rail: fields are valid and a promo_code is present → hand off to the promo handler
+  // and return BEFORE the x402 daily-limit check and the x402 payment middleware. A promo
+  // order takes no payment and does not consume x402 quota. Invalid/exhausted codes are
+  // rejected inside placePromoOrder (it never silently falls through to a paid charge).
+  if (hasPromo) {
+    // Reject ambiguous requests that carry BOTH a promo code and an x402 payment authorization,
+    // rather than silently taking the free path and ignoring the signed payment.
+    if (req.get('payment-signature') || req.get('x-payment')) {
+      return res.status(400).json({ error: 'ambiguous_payment', message: 'Send either a promo_code (free) or an x402 payment, not both.' });
+    }
+    // Throttle per IP first so a caller can't brute-force codes through this endpoint.
+    if (promoRateLimited(req.ip)) {
+      return res.status(429).json({ error: 'rate_limit', message: 'Too many promo attempts. Try again in a minute.' });
+    }
+    return checkoutRouter.placePromoOrder(req, res);
+  }
 
   // Daily per-email cap is OFF by default (0). Set X402_DAILY_LIMIT=N in prod to re-enable.
   const dailyLimit = parseInt(process.env.X402_DAILY_LIMIT ?? '0', 10);

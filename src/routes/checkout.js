@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { getProduct } = require('../lib/products');
-const { createOrder, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, incrementX402RateLimit } = require('../lib/db');
+const { createOrder, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, incrementX402RateLimit, claimPromo, markPromoOrderPlaced, releasePromo } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { sendOrderConfirmation } = require('../lib/email');
 const { extractPaymentIdentity } = require('../lib/x402-payment');
+const { createShopifyOrder } = require('../lib/fulfillment');
+const { isValidPromoCode, getPromoMaxUses } = require('../lib/promos');
 
 // Minimal HTML escaper — prevents injected HTML/script in alert emails sent to store owner
 function esc(s) {
@@ -16,8 +18,6 @@ function esc(s) {
     .replace(/'/g, '&#x27;');
 }
 
-const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
-const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_KEY;
 const ALERT_EMAIL = process.env.EMAIL_FROM || 'leen.taher@gmail.com';
 
 const STORE_CLOSED = { error: 'store_closed', message: 'The store is temporarily closed. Check back soon.' };
@@ -130,63 +130,102 @@ router.post('/', async (req, res) => {
   });
 });
 
-async function createShopifyOrder({ name, email, address, product, sku }) {
-  if (!SHOPIFY_DOMAIN || !SHOPIFY_TOKEN) throw new Error('Shopify not configured');
-  if (!product.shopifyVariantId || product.shopifyVariantId === 'FILL_ME') {
-    throw new Error(`Shopify variant ID not configured for SKU "${sku}" — update products.js`);
+// placePromoOrder — the FREE rail. Runs from the index.js /checkout gate BEFORE the x402
+// payment middleware (a promo request carries no payment header, so it never reaches x402).
+// Fields (sku/name/email/address) are already validated by the gate. Flow mirrors the x402
+// path: reserve → fulfill → place / release, but with no payment.
+async function placePromoOrder(req, res) {
+  const { sku, name, email, address, promo_code } = req.body || {};
+  const code = String(promo_code || '').trim();
+
+  // Allowlist check — codes come from the PROMO_CODES env var, never arbitrary input.
+  if (!isValidPromoCode(code)) {
+    return res.status(400).json({
+      error: 'invalid_promo_code',
+      message: `"${code}" is not a valid promo code. Remove it to pay with USDC via x402, or double-check the code.`,
+    });
   }
 
-  const body = {
-    order: {
-      email,
-      financial_status: 'paid',
-      line_items: [{ variant_id: product.shopifyVariantId, quantity: 1 }],
-      shipping_address: {
-        first_name: name.split(' ')[0],
-        last_name: name.split(' ').slice(1).join(' ') || '',
-        address1: address.line1,
-        address2: address.line2 || '',
-        city: address.city,
-        province: address.state,
-        zip: address.postal_code,
-        country_code: address.country,
-      },
-      send_receipt: true,  // Shopify sends customer confirmation email automatically
-      note: `Placed via x402 USDC payment on Base. SKU: ${sku}. Agent-native purchase.`,
-      tags: 'agent-order,x402,usdc',
-    },
-  };
+  const product = getProduct(sku); // already validated in the gate, re-fetch for fulfillment
+  const orderId = generateOrderId();
+  const maxUses = getPromoMaxUses(code);
 
-  // 10 second timeout — prevents the handler hanging forever if Shopify is slow
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-
-  let response;
+  // Reserve the redemption atomically (race-safe per-code cap + one-use-per-email).
+  let claim;
   try {
-    response = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2025-01/orders.json`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
+    claim = await claimPromo({ code, email, maxUses, orderId });
+  } catch (err) {
+    console.error('[promo] claimPromo failed:', err.message);
+    return res.status(503).json({ error: 'service_unavailable', message: 'Could not redeem the promo right now. No order was created — please try again.' });
+  }
+
+  if (claim.exhausted) {
+    return res.status(409).json({ error: 'promo_exhausted', message: 'This promo code has reached its redemption limit.' });
+  }
+  if (claim.inProgress) {
+    // A recent reservation for this (code,email) is still being fulfilled. Don't double-ship —
+    // tell the caller to retry shortly. A stale reservation (crash window) self-heals via reclaim.
+    return res.status(409).json({ error: 'redemption_in_progress', message: 'A redemption for this promo and email is already being processed. Retry in a moment.' });
+  }
+  if (claim.already) {
+    // Idempotent: this email already has a PLACED order for this code — return it, don't re-ship.
+    return res.status(200).json({
+      order_id: claim.existing.order_id,
+      status: claim.existing.status || 'placed',
+      sku,
+      shopify_order_id: claim.existing.shopify_order_id || null,
+      payment: 'promo_free',
+      idempotent: true,
+      message: 'This promo was already redeemed with this email — returning your original order.',
+    });
+  }
+
+  // Fulfill. On any failure, release the reservation so the code use is not consumed.
+  let shopifyOrderId;
+  try {
+    shopifyOrderId = await createShopifyOrder({
+      name, email, address, product, sku,
+      note: `Placed via promo code (free). SKU: ${sku}. Agent-native purchase.`,
+      tags: 'agent-order,promo,free',
     });
   } catch (err) {
-    if (err.name === 'AbortError') throw new Error('Shopify API timed out after 10s');
-    throw err;
-  } finally {
-    clearTimeout(timeout);
+    console.error('[promo] Shopify order creation failed:', err.message);
+    await releasePromo({ code, email }).catch(e => console.warn('[promo] releasePromo failed:', e.message));
+    try {
+      await sendOrderConfirmation({
+        to: ALERT_EMAIL,
+        subject: '⚠️ promo checkout: Shopify order creation failed (redemption released)',
+        html: `<p>A promo (free) checkout failed at Shopify order creation. The promo redemption was released — the code can be used again.</p>
+               <p><strong>Customer:</strong> ${esc(name)} &lt;${esc(email)}&gt;</p>
+               <p><strong>Promo:</strong> ${esc(code)}</p>
+               <p><strong>SKU:</strong> ${esc(sku)}</p>
+               <p><strong>Address:</strong> ${esc(address.line1)}, ${esc(address.city)}, ${esc(address.state)} ${esc(address.postal_code)}, ${esc(address.country)}</p>
+               <p><strong>Error:</strong> ${esc(err.message)}</p>`,
+      });
+    } catch (emailErr) {
+      console.error('[promo] Failed to send alert email:', emailErr.message);
+    }
+    return res.status(502).json({ error: 'fulfillment_failed', message: 'Order creation failed. The promo was not consumed — safe to retry.', sku });
   }
 
-  if (!response.ok) {
-    const text = await response.text();
-    console.error('[checkout] Shopify API error:', response.status, text); // full detail in server logs only
-    throw new Error(`Shopify order creation failed (${response.status})`); // sanitized for callers
+  // Mark the redemption placed, and record the order in the orders table for history.
+  try {
+    await markPromoOrderPlaced({ code, email, shopifyOrderId });
+    await createOrder({ orderId, apiKey: `promo_${code}`, sku, stripePaymentIntentId: null, shopifyOrderId });
+  } catch (err) {
+    console.warn('[promo] Failed to persist order record (non-fatal):', err.message);
   }
 
-  const data = await response.json();
-  return String(data.order.id);
+  return res.status(201).json({
+    order_id: orderId,
+    status: 'placed',
+    sku,
+    shopify_order_id: shopifyOrderId,
+    payment: 'promo_free',
+    free_order: true,
+    message: 'Promo redeemed — your hat is on the way. No payment required.',
+  });
 }
 
 module.exports = router;
+module.exports.placePromoOrder = placePromoOrder;

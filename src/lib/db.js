@@ -62,6 +62,13 @@ async function initDb() {
     }
   }
 
+  // Migration: promo redemptions track the order they produced. Two-phase free-order
+  // create (reserve→place→release) mirrors the x402 path. NULLs are fine for any
+  // Stripe-era redemption rows that predate these columns.
+  await pool.query(`ALTER TABLE used_promos ADD COLUMN IF NOT EXISTS order_id TEXT`);
+  await pool.query(`ALTER TABLE used_promos ADD COLUMN IF NOT EXISTS shopify_order_id TEXT`);
+  await pool.query(`ALTER TABLE used_promos ADD COLUMN IF NOT EXISTS status TEXT`);
+
   // Migration: x402 payment identity on orders — payer wallet + EIP-3009 nonce.
   // Enables idempotency (one payment authorization can create at most one order, even
   // under concurrent retries) and reconciliation of the capture-after-fulfillment window.
@@ -172,4 +179,82 @@ async function incrementX402RateLimit(email) {
   return r.rows[0].count; // new count after increment
 }
 
-module.exports = { initDb, createOrder, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, getX402RateLimit, incrementX402RateLimit };
+// ── Promo free-order claim (two-phase, atomic per code) ──────────────────────
+// A promo grants a FREE order and bypasses x402. Because /checkout is public and
+// unauthenticated, the per-code use cap must be race-safe: two concurrent requests
+// must not both slip past a maxUses check. We serialize claims for a given code with
+// a transaction-scoped advisory lock, so the COUNT + INSERT is effectively atomic.
+//
+// Returns one of:
+//   { reserved: true }             — fresh claim, caller may fulfill
+//   { already: true, existing }    — (code,email) genuinely redeemed: return original, don't re-ship
+//   { inProgress: true, existing } — a 'pending' reservation exists (in flight, or crashed
+//                                    mid-flight); caller should 409/retry. Never auto-reclaimed.
+//   { exhausted: true }            — code has hit its maxUses cap
+async function claimPromo({ code, email, maxUses, orderId }) {
+  const c = code.toUpperCase().trim();
+  const e = email.toLowerCase().trim();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialize all concurrent claims for THIS code (released automatically at COMMIT/ROLLBACK).
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [c]);
+
+    // Existing redemption for this (code, email)?
+    const mine = await client.query('SELECT order_id, shopify_order_id, status FROM used_promos WHERE code = $1 AND email = $2', [c, e]);
+    const row = mine.rows[0];
+    if (row) {
+      // Genuinely redeemed: a placed new-rail order, OR a legacy Stripe-era row (no
+      // status/order_id columns populated). Either way, don't fulfill again.
+      if (row.status === 'placed' || (row.status == null && row.order_id == null)) {
+        await client.query('COMMIT');
+        return { already: true, existing: row };
+      }
+      // A 'pending' reservation: fulfillment is in flight, or a prior attempt crashed
+      // mid-flight. We deliberately do NOT auto-reclaim it — a crash AFTER the Shopify order
+      // was created but BEFORE it was marked 'placed' would let a reclaim ship a SECOND free
+      // hat. Return in-progress; genuinely stuck 'pending' rows are reconciled out-of-band
+      // (same model as the x402 pending path), so a free order is never double-shipped.
+      await client.query('COMMIT');
+      return { inProgress: true, existing: row };
+    }
+
+    // Enforce the per-code total cap under the lock — race-free.
+    const { rows } = await client.query('SELECT COUNT(*)::int AS n FROM used_promos WHERE code = $1', [c]);
+    if (rows[0].n >= maxUses) {
+      await client.query('ROLLBACK');
+      return { exhausted: true };
+    }
+
+    await client.query(
+      `INSERT INTO used_promos (code, email, used_at, order_id, status) VALUES ($1, $2, $3, $4, 'pending')`,
+      [c, e, new Date().toISOString(), orderId]
+    );
+    await client.query('COMMIT');
+    return { reserved: true };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Step 2a: mark a reserved promo redemption placed once Shopify succeeds.
+async function markPromoOrderPlaced({ code, email, shopifyOrderId }) {
+  await pool.query(
+    `UPDATE used_promos SET status = 'placed', shopify_order_id = $3 WHERE code = $1 AND email = $2`,
+    [code.toUpperCase().trim(), email.toLowerCase().trim(), shopifyOrderId]
+  );
+}
+
+// Step 2b: release a reserved redemption if fulfillment fails, so the code use is NOT
+// consumed. Only deletes the still-'pending' reservation — never a placed order.
+async function releasePromo({ code, email }) {
+  await pool.query(
+    `DELETE FROM used_promos WHERE code = $1 AND email = $2 AND status = 'pending'`,
+    [code.toUpperCase().trim(), email.toLowerCase().trim()]
+  );
+}
+
+module.exports = { initDb, createOrder, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, getX402RateLimit, incrementX402RateLimit, claimPromo, markPromoOrderPlaced, releasePromo };

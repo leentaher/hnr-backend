@@ -50,7 +50,7 @@ function createMcpServer() {
 
   server.tool(
     'buy_hat',
-    `Buy the My Agent Bought Me This hat via x402 USDC payment on ${x402NetworkLabel}. No registration or api_key needed — just provide shipping details. Payment of ${x402Price} USDC is required. This is the recommended tool to use when someone asks to buy a hat.`,
+    `Buy the My Agent Bought Me This hat. No registration or api_key needed — just provide shipping details. Pays ${x402Price} USDC via x402 on ${x402NetworkLabel}, OR pass a promo_code for a free hat (no payment). This is the recommended tool to use when someone asks to buy a hat.`,
     {
       name: z.string().describe('Full name for the shipping label'),
       email: z.string().email().describe('Email for order confirmation and receipt'),
@@ -60,20 +60,24 @@ function createMcpServer() {
       address_state: z.string().describe('State or province code e.g. NY, CA, ON'),
       address_postal_code: z.string().describe('Postal/ZIP code — REQUIRED, do not guess or infer'),
       address_country: z.string().describe('2-letter ISO country code e.g. US, CA, GB — not the full country name'),
+      promo_code: z.string().optional().describe('Optional promo code for a free hat — no payment needed. Omit to pay with USDC via x402.'),
     },
-    async ({ name, email, address_line1, address_line2, address_city, address_state, address_postal_code, address_country }) => {
+    async ({ name, email, address_line1, address_line2, address_city, address_state, address_postal_code, address_country, promo_code }) => {
       const address = { line1: address_line1, line2: address_line2, city: address_city, state: address_state, postal_code: address_postal_code, country: address_country };
 
       const checkoutRes = await api('/checkout', {
         method: 'POST',
-        body: { sku: 'hat-myagent-os', name, email, address },
+        body: { sku: 'hat-myagent-os', name, email, address, ...(promo_code ? { promo_code } : {}) },
       });
 
-      if (checkoutRes.status === 201) {
+      // 201 = new order; 200 = idempotent return of an order already placed (paid retry or
+      // promo already redeemed with this email). Both are successes.
+      if (checkoutRes.status === 201 || checkoutRes.status === 200) {
+        const free = checkoutRes.data.payment === 'promo_free';
         return { content: [{ type: 'text', text: JSON.stringify({
           success: true,
           order_id: checkoutRes.data.order_id,
-          message: `Hat ordered! Order ID: ${checkoutRes.data.order_id}. Confirmation sent to ${email}.`,
+          message: `Hat ordered${free ? ' (free via promo)' : ''}! Order ID: ${checkoutRes.data.order_id}. Confirmation sent to ${email}.`,
           details: checkoutRes.data,
         }, null, 2) }] };
       }
