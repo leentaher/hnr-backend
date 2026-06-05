@@ -387,6 +387,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
     console.log(`[x402] Payment middleware active on POST /checkout (network: ${network}, price: ${x402Price})`);
   } catch (err) {
     console.error('[x402] FATAL: payment middleware failed to initialize — /checkout DISABLED (fail closed) to prevent unpaid orders:', err.message);
+    globalThis.__x402_init_error = (err && (err.stack || err.message)) || String(err); // TEMP DEBUG — remove
   }
 } else {
   console.error('[x402] STORE_WALLET_ADDRESS not set — /checkout DISABLED (fail closed) to prevent unpaid orders');
@@ -402,6 +403,7 @@ if (x402Active) {
   app.use('/checkout', (req, res) => res.status(503).json({
     error: 'payment_unavailable',
     message: 'Checkout is temporarily unavailable — no payment system is active. No order was created and no payment was taken.',
+    debug: globalThis.__x402_init_error || null, // TEMP DEBUG — remove
   }));
 }
 
