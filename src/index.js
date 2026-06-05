@@ -294,7 +294,7 @@ if (process.env.STORE_WALLET_ADDRESS) {
   // Price + network come from the single source of truth (lib/pricing) so the checkout
   // charge, /orders/skus, the MCP tool text, and the payment manifest can never disagree.
   const { getPricing, checkoutDescription } = require('./lib/pricing');
-  const { env: X402_ENV, network, priceStr: x402Price } = getPricing();
+  const { env: X402_ENV, network, priceStr: x402Price, isMainnet } = getPricing();
   const x402Description = checkoutDescription();
   console.log(`[x402] X402_ENV=${X402_ENV}`);
 
@@ -310,23 +310,27 @@ if (process.env.STORE_WALLET_ADDRESS) {
     const { declareDiscoveryExtension } = require('@x402/extensions');
     const crypto = require('crypto');
 
-    // CDP Secret API keys use simple Bearer token auth (Key ID + Secret),
-    // not the JWT/EC signing approach. Pass the secret directly.
-    const cdpKeyName = process.env.CDP_API_KEY_NAME;
-    const cdpSecret = process.env.CDP_API_KEY_PRIVATE_KEY;
-
-    const facilitatorConfig = { url: facilitatorUrl };
-    if (cdpKeyName && cdpSecret) {
-      facilitatorConfig.createAuthHeaders = async () => {
-        const headers = { Authorization: `Bearer ${cdpSecret}` };
-        return { verify: headers, settle: headers, supported: headers };
-      };
-      console.log('[x402] CDP auth configured');
+    // Facilitator selection by network:
+    //  - MAINNET (real USDC) needs a mainnet-capable facilitator. Coinbase CDP, via
+    //    @coinbase/x402's `facilitator`, targets https://api.cdp.coinbase.com/platform/v2/x402
+    //    and builds CDP's per-request JWT auth from CDP_API_KEY_ID + CDP_API_KEY_SECRET.
+    //    (The old hand-rolled `Bearer <secret>` is NOT valid CDP auth, and the x402.org
+    //    proxy below is Base-Sepolia-only — that pairing 500s every mainnet checkout.)
+    //  - TESTNET keeps the x402.org facilitator via the Vercel proxy (reaches it past the
+    //    Cloudflare block on Railway IPs).
+    let facilitatorClient;
+    if (isMainnet) {
+      if (!process.env.CDP_API_KEY_ID || !process.env.CDP_API_KEY_SECRET) {
+        // Fail closed: a mainnet store with no real facilitator 500s every checkout.
+        throw new Error('mainnet requires CDP_API_KEY_ID + CDP_API_KEY_SECRET for the Coinbase CDP facilitator');
+      }
+      const { facilitator } = require('@coinbase/x402');
+      facilitatorClient = new HTTPFacilitatorClient(facilitator);
+      console.log('[x402] CDP mainnet facilitator active (api.cdp.coinbase.com)');
     } else {
-      console.warn('[x402] CDP_API_KEY_NAME/PRIVATE_KEY not set — facilitator calls will be unauthenticated');
+      facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
+      console.log(`[x402] testnet facilitator: ${facilitatorUrl}`);
     }
-
-    const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
     const resourceServer = new x402ResourceServer(facilitatorClient)
       .register(network, new ExactEvmScheme());
     // Bazaar extension is auto-registered by paymentMiddleware when it detects
