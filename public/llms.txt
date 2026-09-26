@@ -7,6 +7,10 @@
 - OpenAPI spec: https://web-production-77376.up.railway.app/.well-known/openapi.json
 - Agent discovery: https://web-production-77376.up.railway.app/.well-known/agent.json
 - Payment manifest (live price + network): https://web-production-77376.up.railway.app/.well-known/payment-manifest.json
+- MCP server: https://github.com/leentaher/humannotrequired-mcp — point an MCP-compatible agent at this, or just give it the API base URL above directly.
+
+## Quick start (for a human directing their agent)
+Tell your agent: "Buy me the hat from Humans Not Required. Here's my shipping info: [name, email, address]." A capable agent can then find this file, read the payment manifest, and complete the purchase on its own.
 
 ## How to buy
 The ONLY order endpoint is `POST /checkout`. There is no registration, no API key, and no card flow. Two ways to pay:
