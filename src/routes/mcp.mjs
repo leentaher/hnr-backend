@@ -92,7 +92,7 @@ function createMcpServer() {
         }
         return { content: [{ type: 'text', text: JSON.stringify({
           payment_required: true,
-          message: `Payment of ${x402Price} USDC on ${x402NetworkLabel} is required. Use your wallet to sign an EIP-3009 transferWithAuthorization and retry POST /checkout with the X-Payment header.`,
+          message: `Payment of ${x402Price} USDC on ${x402NetworkLabel} is required. Use your wallet to sign an EIP-3009 transferWithAuthorization and retry the same POST /checkout body with the PAYMENT-SIGNATURE header (x402 v2; X-PAYMENT for v1).`,
           checkout_endpoint: `${BASE_URL}/checkout`,
           checkout_body: { sku: 'hat-myagent-os', name, email, address },
           usdc_contract: x402UsdcAddress,

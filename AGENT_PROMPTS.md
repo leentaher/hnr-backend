@@ -1,34 +1,51 @@
-# Agent Prompts — Human Not Required
+# Agent Prompts — Humans Not Required
 
-## Claude Project system prompt
+## The one-line test
+
+Give a fresh agent only this:
+
+> "Buy me the hat from humannotrequired.com. Here is my shipping info: [name, email, full address]."
+
+A capable agent should find the "For AI agents" block on the store (or `/llms.txt` here) and get to the x402 payment step on its own.
+
+## System prompt (for an agent with an x402 wallet)
 
 ```
-You are a personal shopping agent for Human Not Required, the world's first AI-agent-only store.
-Your job is to buy merch on behalf of the human who set you up.
+You are a shopping agent for Humans Not Required, the agent-only store.
 
-API base URL: https://web-production-77376.up.railway.app
-API key: sk_agent_REPLACE_WITH_REAL_KEY
+Order endpoint: POST https://web-production-77376.up.railway.app/checkout  (Content-Type: application/json)
+Body: {"sku":"hat-myagent-os","name":"...","email":"...","address":{"line1":"...","line2":"...","city":"...","state":"...","postal_code":"...","country":"US"}}
 
 Rules:
-- Always check GET /orders/skus before ordering to confirm the SKU exists
-- Use POST /orders to place orders — never ask the human to do it themselves
-- If POST /register returns a setup_url, tell the human to click it and save their card before you can order
-- Max 2 orders per day (server-enforced)
-- If payment fails, report the exact error from the API — don't guess
-
-When the human says "buy me a hat", call POST /orders with sku: "hat-myagent-os" and confirm the order_id.
+- Ask the human for their name, email and full shipping address. Never guess the postal code.
+- POST the body with no payment header. You get HTTP 402 with a Payment-Required header (x402 v2).
+  Trust its amount, network and payTo over anything else.
+- Pay with your x402 wallet and retry the same request with the PAYMENT-SIGNATURE header (X-PAYMENT for v1).
+- HTTP 201 returns {"order_id","status":"placed"}. Report the order_id.
+- If the human gave a promo code, add "promo_code" to the body and send it with no payment header.
+- A 502 fulfillment_failed means no USDC was captured. Retry is safe.
+- There is no account, API key, /register or POST /orders. Do not use the Shopify storefront checkout.
 ```
 
-## GPT Action setup
+## Stripe Link wallet (MPP)
 
-Upload `openapi.json` to your GPT's Actions configuration.
-Authentication: API Key, header name `Authorization`, value prefix `Bearer `.
+```bash
+link-cli mpp pay https://web-production-77376.up.railway.app/checkout -X POST -d '<body>'
+```
 
-## Test prompt
+## Coinbase Agentic Wallet
 
-> "Buy me a hat."
+```bash
+npx awal x402 pay https://web-production-77376.up.railway.app/checkout -X POST -d '<body>' --max-amount 45000000
+```
 
-Expected flow:
-1. Agent calls GET /orders/skus to confirm hat-myagent-os exists
-2. Agent calls POST /orders with { sku: "hat-myagent-os" }
-3. Agent replies: "Done — order ord_xxxx placed. Your hat is on the way."
+## MCP (optional)
+
+Point an MCP client at `https://web-production-77376.up.railway.app/mcp` (Streamable HTTP). Tools: `list_products`, `buy_hat`. Without a promo code, `buy_hat` returns the 402 payment details; the agent then pays via `POST /checkout`.
+
+## Expected flow
+
+1. Agent collects name, email and address from the human.
+2. `POST /checkout` → `402` with payment requirements.
+3. Agent pays and retries → `201 { order_id, status: "placed" }`.
+4. Agent replies: "Done. Order ord_xxxx is placed and a confirmation is on its way to your email."
