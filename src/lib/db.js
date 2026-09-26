@@ -153,6 +153,23 @@ async function markX402OrderFailed(orderId) {
   );
 }
 
+// Stripe MPP rail — reuses the orders table's payment_nonce ledger (key: "mpp:<spt>").
+// Drop a reservation whose payment never settled, so the agent can retry with a fresh
+// challenge. Only a still-'pending' row is removed; a paid row is never deleted.
+async function releasePendingOrder(orderId) {
+  await pool.query(`DELETE FROM orders WHERE order_id = $1 AND status = 'pending'`, [orderId]);
+}
+
+// Record the Stripe PaymentIntent that settled an MPP order (before fulfillment, so a crash
+// between charge and Shopify leaves a traceable pending row).
+async function setOrderPaymentIntent(orderId, paymentIntentId) {
+  await pool.query(`UPDATE orders SET stripe_payment_intent_id = $2 WHERE order_id = $1`, [orderId, paymentIntentId]);
+}
+
+async function setOrderStatus(orderId, status) {
+  await pool.query(`UPDATE orders SET status = $2 WHERE order_id = $1`, [orderId, status]);
+}
+
 // x402 rate limit — read-only check, returns current count without incrementing.
 // Use this BEFORE payment fires so failed payments don't consume the daily quota.
 async function getX402RateLimit(email) {
@@ -257,4 +274,4 @@ async function releasePromo({ code, email }) {
   );
 }
 
-module.exports = { initDb, createOrder, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, getX402RateLimit, incrementX402RateLimit, claimPromo, markPromoOrderPlaced, releasePromo };
+module.exports = { initDb, createOrder, releasePendingOrder, setOrderPaymentIntent, setOrderStatus, getOrder, getOrderByNonce, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, getX402RateLimit, incrementX402RateLimit, claimPromo, markPromoOrderPlaced, releasePromo };

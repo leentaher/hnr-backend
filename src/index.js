@@ -12,6 +12,7 @@ const { initDb, getX402RateLimit } = require('./lib/db');
 const { getProduct } = require('./lib/products');
 const ordersRouter = require('./routes/orders');
 const checkoutRouter = require('./routes/checkout');
+const mpp = require('./lib/mpp');
 const emailRouter = require('./routes/email');
 
 // Validate wallet address at startup before accepting any payments
@@ -44,7 +45,7 @@ app.use((req, res, next) => {
   if (origin && allowedOrigins.has(origin)) {
     // Known origin: allow full headers including Authorization
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Payment, Payment-Signature, MCP-Session-Id');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Payment-Authorization, X-Payment, Payment-Signature, MCP-Session-Id');
   } else if (!origin || allowedOrigins.size === 0) {
     // No browser origin (agent/server call) or no origins configured: omit ACAO entirely.
     // Browsers block credentialed requests to wildcard origins anyway; agents don't need CORS.
@@ -52,7 +53,7 @@ app.use((req, res, next) => {
     // Unknown origin — block silently (no ACAO header = browser blocks the response)
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response, Payment-Required');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Response, Payment-Required, WWW-Authenticate, Payment-Receipt');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -142,6 +143,10 @@ app.post('/checkout', async (req, res, next) => {
   // probe — it must run full validation and be fulfilled as a free order. So detect it here
   // and do NOT short-circuit it into the x402 middleware below.
   const hasPromo = !!(req.body && req.body.promo_code);
+  const hasX402 = !!(req.get('payment-signature') || req.get('x-payment'));
+  // Stripe MPP credential (Authorization: Payment …). Only honored when MPP is active; otherwise
+  // it's treated as an unpaid request and gets the normal challenge(s).
+  const hasMpp = mpp.isActive() && mpp.hasMppCredential(req);
 
   // x402 discovery: a request without a payment header is asking for the 402 challenge
   // (payment requirements), not placing an order — standard x402 clients probe this way and
@@ -150,8 +155,28 @@ app.post('/checkout', async (req, res, next) => {
   // so we still never settle USDC on invalid input. Check BOTH header names (v2
   // PAYMENT-SIGNATURE and v1 X-PAYMENT) so a paid v2 request can never skip validation —
   // mirrors the detection in lib/x402-payment.js.
-  if (!hasPromo && !req.get('payment-signature') && !req.get('x-payment')) {
+  //
+  // Stripe MPP: an unpaid request also gets the Stripe challenge as WWW-Authenticate, so one 402
+  // carries both x402 (Payment-Required) and MPP (WWW-Authenticate: Payment method="stripe").
+  // The x402 middleware writes the 402 itself; the header set here rides along on it.
+  if (!hasPromo && !hasX402 && !hasMpp) {
+    const mppChallenge = await mpp.challengeHeader(req);
+    if (mppChallenge) {
+      res.setHeader('WWW-Authenticate', mppChallenge);
+      // x402 failed closed → answer the probe with the MPP-only 402 instead of a bare 503.
+      if (!x402Active) {
+        return res.status(402).set('Cache-Control', 'no-store').json({
+          error: 'payment_required',
+          message: 'Pay with a Stripe Link wallet (WWW-Authenticate: Payment method="stripe").',
+        });
+      }
+    }
     return next();
+  }
+
+  // Exactly one way to pay per request.
+  if ([hasPromo, hasX402, hasMpp].filter(Boolean).length > 1) {
+    return res.status(400).json({ error: 'ambiguous_payment', message: 'Send exactly one of: a promo_code, an x402 payment, or a Stripe MPP credential. No payment was taken.' });
   }
 
   const { sku, name, email, address } = req.body || {};
@@ -260,6 +285,12 @@ app.post('/checkout', async (req, res, next) => {
       return res.status(429).json({ error: 'rate_limit', message: 'Too many promo attempts. Try again in a minute.' });
     }
     return checkoutRouter.placePromoOrder(req, res);
+  }
+
+  // Stripe MPP rail: fields are valid → settle the Shared Payment Token and fulfill, without ever
+  // touching the x402 middleware. Settlement + idempotency live in placeMppOrder.
+  if (hasMpp) {
+    return checkoutRouter.placeMppOrder(req, res);
   }
 
   // Daily per-email cap is OFF by default (0). Set X402_DAILY_LIMIT=N in prod to re-enable.
@@ -468,5 +499,7 @@ initDb()
     console.error('[startup] price guardrail failed (strict mode):', err.message);
     process.exit(1);
   }))
+  // Stripe MPP rail — never fatal: if it can't init, MPP just isn't offered (x402 is unaffected).
+  .then(() => mpp.initMpp())
   .then(() => app.listen(PORT, () => console.log(`Human Not Required API running on port ${PORT}`)))
   .catch(err => { console.error('[startup] DB init failed:', err.message); process.exit(1); });

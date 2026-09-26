@@ -10,13 +10,13 @@ Do not attempt to buy anything through https://humannotrequired.com in a browser
 - OpenAPI spec: https://web-production-77376.up.railway.app/.well-known/openapi.json
 - Agent discovery: https://web-production-77376.up.railway.app/.well-known/agent.json
 - Payment manifest (live price + network): https://web-production-77376.up.railway.app/.well-known/payment-manifest.json
-- MCP server: https://github.com/leentaher/humannotrequired-mcp — point an MCP-compatible agent at this, or just give it the API base URL above directly.
+- MCP server (optional, hosted): https://web-production-77376.up.railway.app/mcp — Streamable HTTP, tools: list_products, buy_hat. Without a promo code, buy_hat does not pay: it returns the 402 payment details and you pay via POST /checkout yourself. The plain HTTP flow below is the primary path.
 
 ## Quick start (for a human directing their agent)
 Tell your agent: "Buy me the hat from Humans Not Required. Here's my shipping info: [name, email, address]." A capable agent can then find this file, read the payment manifest, and complete the purchase on its own.
 
 ## How to buy
-The ONLY order endpoint is `POST /checkout`. There is no registration, no API key, and no card flow. Two ways to pay:
+The ONLY order endpoint is `POST /checkout`. There is no registration and no API key. An unpaid POST returns HTTP 402 carrying every payment method currently offered. Three ways to pay:
 
 ### Pay with x402 (USDC on Base — fully agent-native)
 Requires: an EVM wallet on Base with USDC, and any x402 v2 client (e.g. @x402/fetch).
@@ -27,17 +27,24 @@ Requires: an EVM wallet on Base with USDC, and any x402 v2 client (e.g. @x402/fe
 - Read the live network, USDC contract, amount, and payee from the 402 envelope (or the payment manifest) — never hard-code them. The store runs Base Sepolia (testnet) by default and flips to Base mainnet for production pricing.
 - Payment is captured only after /checkout returns 2xx. A 502 (`fulfillment_failed`) means no USDC was captured — safe to retry. Idempotency is keyed on the payment nonce: replaying the same signed authorization returns your original order, not a second hat.
 
+### Pay with a Stripe Link wallet (card, via Stripe's Machine Payments Protocol)
+Offered when the 402 includes `WWW-Authenticate: Payment ... method="stripe"`.
+1. `link-cli mpp pay https://web-production-77376.up.railway.app/checkout -X POST -d '<body>'` (Stripe's @stripe/link-cli). Your human approves the spend in the Link app.
+2. The client retries with `Authorization: Payment <credential>` carrying a Shared Payment Token; the server charges it through Stripe and returns 201 with a `Payment-Receipt` header.
+- Same body, same validation, same price as x402. One payment token = one charge = one hat: re-sending the same token returns your original order.
+- If fulfillment fails after the charge, the payment is refunded automatically (502 `fulfillment_failed`).
+
 ### Pay with a promo code (free)
 1. POST /checkout with { sku, name, email, address, promo_code } and no payment header.
 2. A valid code places a free order; an invalid or exhausted code returns 400/409 with no charge.
-- Do not send both a promo_code and an x402 payment — that is rejected as `ambiguous_payment`.
+- Send exactly one of: a promo_code, an x402 payment, or a Stripe MPP credential. Mixing them is rejected as `ambiguous_payment`.
 
 ## Available products
 - sku: hat-myagent-os — "My Agent Bought Me This" Embroidered Hat — One Size
   - Price + network are single-sourced server-side. Call GET /orders/skus or read the payment manifest for the live USDC price.
 
 ## Auth
-None. The signed x402 payment IS the authorization. There is no Bearer token and no POST /register.
+None. The payment (x402 signature or Stripe MPP credential) IS the authorization. There is no Bearer token and no POST /register.
 
 ## Limits
 - No human checkout — the storefront has no buy button; only the agent API can order. See "Do not use the website" above.

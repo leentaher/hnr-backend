@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { getProduct } = require('../lib/products');
-const { createOrder, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, incrementX402RateLimit, claimPromo, markPromoOrderPlaced, releasePromo } = require('../lib/db');
+const { createOrder, reserveX402Order, markX402OrderPlaced, markX402OrderFailed, releasePendingOrder, setOrderPaymentIntent, setOrderStatus, incrementX402RateLimit, claimPromo, markPromoOrderPlaced, releasePromo } = require('../lib/db');
 const { generateOrderId } = require('../lib/keys');
 const { sendOrderConfirmation } = require('../lib/email');
 const { extractPaymentIdentity } = require('../lib/x402-payment');
 const { createShopifyOrder } = require('../lib/fulfillment');
 const { isValidPromoCode, getPromoMaxUses } = require('../lib/promos');
+const mpp = require('../lib/mpp');
 
 // Minimal HTML escaper — prevents injected HTML/script in alert emails sent to store owner
 function esc(s) {
@@ -227,5 +228,128 @@ async function placePromoOrder(req, res) {
   });
 }
 
+// placeMppOrder — the Stripe MPP rail (card / Link wallet via a Shared Payment Token). Runs from
+// the index.js /checkout gate after the same field validation as x402, and never reaches the
+// x402 middleware. MPP settles IMMEDIATELY (no deferred capture), so the order is:
+//   reserve "mpp:<spt>" → settle via Stripe → Shopify → placed
+// A payment that doesn't settle releases the reservation (no charge, retry allowed); a Shopify
+// failure after settlement is REFUNDED. One SPT → at most one charge and one hat.
+async function placeMppOrder(req, res) {
+  const { sku, name, email, address } = req.body || {};
+  const product = getProduct(sku);
+
+  const spt = mpp.credentialSpt(req);
+  if (!spt) {
+    // Malformed credential — let mppx answer with its problem+json and a fresh challenge.
+    const result = await mpp.settle(req).catch(() => null);
+    if (result && !result.ok) return mpp.sendFetchResponse(res, result.response);
+    return res.status(400).json({ error: 'malformed_credential', message: 'The Payment credential could not be read. No payment was taken.' });
+  }
+
+  const nonce = `mpp:${spt}`;
+  const orderId = generateOrderId();
+  let reservation;
+  try {
+    reservation = await reserveX402Order({ orderId, apiKey: `mpp_${email}`, sku, payerAddress: 'stripe_mpp', paymentNonce: nonce });
+  } catch (err) {
+    console.error('[mpp] reserve failed:', err.message);
+    return res.status(503).json({ error: 'service_unavailable', message: 'Could not start checkout. No payment was taken — please try again.' });
+  }
+  if (!reservation.reserved) {
+    const existing = reservation.existing;
+    const placed = existing?.status === 'placed';
+    return res.status(placed ? 200 : 409).json({
+      order_id: existing?.order_id,
+      status: existing?.status,
+      sku,
+      shopify_order_id: existing?.shopify_order_id || null,
+      payment: 'stripe_mpp',
+      idempotent: true,
+      message: placed
+        ? 'This payment was already processed — returning your original order.'
+        : 'A checkout for this payment token is already in progress, failed, or was refunded. Request a new payment token instead of re-sending this one.',
+    });
+  }
+
+  // Settle the SPT through Stripe (mppx verifies the HMAC-bound challenge + expiry first).
+  let settlement;
+  try {
+    settlement = await mpp.settle(req);
+  } catch (err) {
+    console.error('[mpp] settlement error:', err.message);
+    await releasePendingOrder(orderId).catch(e => console.warn('[mpp] releasePendingOrder failed:', e.message));
+    return res.status(502).json({ error: 'payment_error', message: 'Stripe could not process the payment. Retry with a new payment token.' });
+  }
+  if (!settlement.ok) {
+    await releasePendingOrder(orderId).catch(e => console.warn('[mpp] releasePendingOrder failed:', e.message));
+    return mpp.sendFetchResponse(res, settlement.response);
+  }
+  const paymentIntentId = settlement.paymentIntentId;
+  await setOrderPaymentIntent(orderId, paymentIntentId).catch(e => console.warn('[mpp] setOrderPaymentIntent failed:', e.message));
+
+  let shopifyOrderId;
+  try {
+    shopifyOrderId = await createShopifyOrder({
+      name, email, address, product, sku,
+      note: `Placed via Stripe MPP (Shared Payment Token). PaymentIntent: ${paymentIntentId}. SKU: ${sku}. Agent-native purchase.`,
+      tags: 'agent-order,mpp,stripe',
+    });
+  } catch (err) {
+    console.error('[mpp] Shopify order creation failed:', err.message);
+    let refunded = false;
+    try {
+      await mpp.refund(paymentIntentId);
+      refunded = true;
+    } catch (refundErr) {
+      console.error('[mpp] REFUND FAILED — manual action needed:', paymentIntentId, refundErr.message);
+    }
+    await setOrderStatus(orderId, refunded ? 'refunded' : 'refund_failed').catch(e => console.warn('[mpp] setOrderStatus failed:', e.message));
+    try {
+      await sendOrderConfirmation({
+        to: ALERT_EMAIL,
+        subject: refunded
+          ? '⚠️ MPP checkout: Shopify order creation failed (payment refunded)'
+          : '🚨 MPP checkout: Shopify failed AND refund failed — refund manually',
+        html: `<p>A Stripe MPP checkout failed at Shopify order creation after the payment settled. ${refunded ? 'The payment was refunded.' : '<strong>The automatic refund FAILED — refund it in the Stripe dashboard.</strong>'}</p>
+               <p><strong>PaymentIntent:</strong> ${esc(paymentIntentId || 'unknown')}</p>
+               <p><strong>Customer:</strong> ${esc(name)} &lt;${esc(email)}&gt;</p>
+               <p><strong>SKU:</strong> ${esc(sku)}</p>
+               <p><strong>Address:</strong> ${esc(address.line1)}, ${esc(address.city)}, ${esc(address.state)} ${esc(address.postal_code)}, ${esc(address.country)}</p>
+               <p><strong>Error:</strong> ${esc(err.message)}</p>`,
+      });
+    } catch (emailErr) {
+      console.error('[mpp] Failed to send alert email:', emailErr.message);
+    }
+    return res.status(502).json({
+      error: 'fulfillment_failed',
+      message: refunded
+        ? 'Order creation failed. Your payment was refunded — safe to retry with a new payment token.'
+        : 'Order creation failed. The store owner has been alerted to refund your payment.',
+      sku,
+    });
+  }
+
+  try {
+    await markX402OrderPlaced(orderId, shopifyOrderId);
+  } catch (err) {
+    console.warn('[mpp] Failed to mark order placed (non-fatal):', err.message);
+  }
+
+  const body = {
+    order_id: orderId,
+    status: 'placed',
+    sku,
+    shopify_order_id: shopifyOrderId,
+    payment: 'stripe_mpp',
+    message: 'Payment settled through Stripe. Your hat is on the way.',
+  };
+  const withReceipt = settlement.withReceipt(new Response(JSON.stringify(body), {
+    status: 201,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  return mpp.sendFetchResponse(res, withReceipt);
+}
+
 module.exports = router;
 module.exports.placePromoOrder = placePromoOrder;
+module.exports.placeMppOrder = placeMppOrder;

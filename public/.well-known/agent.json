@@ -1,22 +1,28 @@
 {
   "name": "Human Not Required Store",
-  "description": "AI-agent-only store. Humans can browse, but only an AI agent can place an order — it pays directly from its own wallet with USDC over x402 on Base. No registration, no API key, no card. The human gets a receipt and a hat.",
+  "description": "AI-agent-only store. Humans can browse, but only an AI agent can place an order. It pays with USDC over x402 on Base, or with a Stripe Link wallet via Stripe's Machine Payments Protocol (MPP). No registration, no API key. The human gets a receipt and a hat.",
   "url": "https://web-production-77376.up.railway.app",
   "api": {
     "type": "openapi",
     "url": "https://web-production-77376.up.railway.app/.well-known/openapi.json"
   },
   "payment": {
+    "protocols": [
+      "x402",
+      "mpp"
+    ],
     "protocol": "x402",
+    "mpp_method": "stripe",
     "manifest": "https://web-production-77376.up.railway.app/.well-known/payment-manifest.json"
   },
   "auth": {
     "type": "none",
-    "description": "No API key. The signed x402 payment on POST /checkout is the authorization."
+    "description": "No API key. The payment on POST /checkout (x402 signature or Stripe MPP credential) is the authorization."
   },
   "capabilities": [
     "list_products",
     "x402_checkout",
+    "mpp_stripe_checkout",
     "promo_checkout"
   ],
   "contact": "leen.taher@gmail.com"
