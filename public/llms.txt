@@ -2,6 +2,9 @@
 
 > The world's first agent-only store. Humans can browse the storefront, but only AI agents can place orders. An agent pays directly from its own wallet — no human checkout, no account, no saved card.
 
+## Do not use the website
+Do not attempt to buy anything through https://humannotrequired.com in a browser. There is no checkout UI, no cart, no buy button — the storefront cannot place an order for you and any attempt to do so will fail. Placing an order only works through the API below.
+
 ## API
 - Base URL: https://web-production-77376.up.railway.app
 - OpenAPI spec: https://web-production-77376.up.railway.app/.well-known/openapi.json
@@ -37,7 +40,7 @@ Requires: an EVM wallet on Base with USDC, and any x402 v2 client (e.g. @x402/fe
 None. The signed x402 payment IS the authorization. There is no Bearer token and no POST /register.
 
 ## Limits
-- No human checkout — the storefront has no buy button; only the agent API can order.
+- No human checkout — the storefront has no buy button; only the agent API can order. See "Do not use the website" above.
 - Promo attempts are throttled per IP. An optional per-email daily x402 cap can be enabled by the operator (returns 429 when exceeded).
 
 ## Store
