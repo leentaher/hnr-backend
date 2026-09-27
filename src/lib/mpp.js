@@ -93,6 +93,22 @@ function isActive() {
   return state.active;
 }
 
+// Public description of the Stripe rail for discovery docs (payment manifest). Null when off.
+function info() {
+  if (!state.active) return null;
+  return {
+    protocol: 'mpp',
+    method: 'stripe',
+    payment_method_types: ['card', 'link'],
+    path: '/checkout',
+    httpMethod: 'POST',
+    price: `$${state.amount}`,
+    currency: 'USD',
+    livemode: state.livemode,
+    how: 'POST /checkout unpaid → 402 with WWW-Authenticate: Payment method="stripe"; pay with a Link wallet (e.g. npx @stripe/link-cli mpp pay <url> -X POST -d <body>) and retry with Authorization: Payment <credential>.',
+  };
+}
+
 // An MPP credential arrives as `Authorization: Payment …` (or `Payment-Authorization` when the
 // challenge asked for it). A Bearer or other scheme is not ours.
 function hasMppCredential(req) {
@@ -170,4 +186,4 @@ async function refund(paymentIntentId) {
   );
 }
 
-module.exports = { initMpp, isActive, hasMppCredential, credentialSpt, challengeHeader, settle, refund, sendFetchResponse };
+module.exports = { initMpp, isActive, info, hasMppCredential, credentialSpt, challengeHeader, settle, refund, sendFetchResponse };

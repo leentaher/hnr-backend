@@ -71,3 +71,18 @@ test('MPP_LIVE lets a live key run on a testnet store, priced at mainnet not tes
     process.env = saved;
   }
 });
+
+test('info() describes the Stripe rail only while active', async () => {
+  const saved = { ...process.env };
+  try {
+    delete process.env.STRIPE_SECRET_KEY;
+    await mpp.initMpp();
+    assert.equal(mpp.info(), null);
+    Object.assign(process.env, { STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_PROFILE_ID: 'profile_test_x', MPP_PRICE: '1.00' });
+    delete process.env.MPP_ENABLED;
+    await mpp.initMpp({ stripeClient: {} });
+    assert.equal(mpp.info().price, '$1.00');
+  } finally {
+    process.env = saved;
+  }
+});

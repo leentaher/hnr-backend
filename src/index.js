@@ -78,7 +78,7 @@ app.get('/.well-known/payment-manifest.json', (req, res) => {
   res.json({
     protocol: 'x402',
     version: '2',
-    description: 'Human Not Required accepts USDC payments from AI agents via x402 on Base. No registration, no card — agents pay directly from their wallet.',
+    description: 'Human Not Required accepts payments from AI agents: USDC via x402 on Base, and (when listed under `mpp`) cards/Link wallets via Stripe MPP. No registration, no API key — one POST /checkout.',
     endpoints: [
       {
         path: '/checkout',
@@ -97,6 +97,8 @@ app.get('/.well-known/payment-manifest.json', (req, res) => {
         },
       },
     ],
+    // Stripe MPP (Link wallet / card), present only while that rail is active.
+    ...(mpp.info() ? { mpp: mpp.info() } : {}),
     contact: 'leen.taher@gmail.com',
   });
 });
