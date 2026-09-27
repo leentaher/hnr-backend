@@ -14,15 +14,22 @@
 // we fulfill. So a fulfillment failure after settlement must be REFUNDED (see refund()).
 //
 // Activation (fail closed — MPP is simply not offered unless all of this holds):
-//   STRIPE_SECRET_KEY  — sk_test_… for testing. A live key is refused unless X402_ENV=mainnet,
-//                        so real card charges can't go live before the store flips to mainnet.
+//   STRIPE_SECRET_KEY  — sk_test_… for testing. A live key is refused unless X402_ENV=mainnet
+//                        OR MPP_LIVE=true (explicit opt-in to real card/Link charges while the
+//                        x402 rail stays on testnet).
+//   MPP_PRICE          — optional USD price for the Stripe rail, e.g. "45.00". In live mode it
+//                        defaults to the mainnet price ($45), never the testnet x402 price, so
+//                        real cards can't be charged a testnet amount. In test mode it defaults
+//                        to the x402 price.
 //   STRIPE_PROFILE_ID  — Stripe profile id (profile_test_… in a sandbox) = MPP networkId.
 //   MPP_ENABLED        — optional kill switch; set to "false" to stop offering MPP.
 //   MPP_SECRET_KEY     — optional challenge-HMAC secret (≥32 bytes); defaults to one derived
 //                        from STRIPE_SECRET_KEY, as in Stripe's MPP sample.
 
 const crypto = require('crypto');
-const { getPricing } = require('./pricing');
+const { getPricing, MAINNET_DEFAULT_PRICE } = require('./pricing');
+
+const parseUsd = (v) => parseFloat(String(v).replace(/^\$/, ''));
 
 const DESCRIPTION = 'My Agent Bought Me This embroidered hat (Humans Not Required)';
 
@@ -43,8 +50,15 @@ async function initMpp({ stripeClient } = {}) {
   } else {
     const livemode = !key.includes('_test_');
     const { isMainnet, priceUsd } = getPricing();
-    if (livemode && !isMainnet) {
-      state = { active: false, reason: 'live Stripe key refused while X402_ENV is not mainnet (use an sk_test_ key)' };
+    const liveOptIn = (process.env.MPP_LIVE || '').toLowerCase().trim() === 'true';
+    // Live charges use MPP_PRICE, else the mainnet price — never a testnet x402 price.
+    const mppPrice = process.env.MPP_PRICE
+      ? parseUsd(process.env.MPP_PRICE)
+      : (livemode && !isMainnet ? parseUsd(MAINNET_DEFAULT_PRICE) : priceUsd);
+    if (livemode && !isMainnet && !liveOptIn) {
+      state = { active: false, reason: 'live Stripe key refused while X402_ENV is not mainnet (set MPP_LIVE=true or use an sk_test_ key)' };
+    } else if (!(mppPrice > 0)) {
+      state = { active: false, reason: `invalid MPP_PRICE "${process.env.MPP_PRICE}"` };
     } else {
       try {
         const { Mppx, stripe } = await import('mppx/server');
@@ -62,8 +76,7 @@ async function initMpp({ stripeClient } = {}) {
           secretKey,
           realm: new URL(appBaseUrl()).host,
         });
-        // Same USD price as the x402 rail (single-sourced in lib/pricing).
-        const amount = priceUsd.toFixed(2);
+        const amount = mppPrice.toFixed(2);
         state = { active: true, livemode, amount, client, handler: mppx.charge({ amount, description: DESCRIPTION }) };
         console.log(`[mpp] Stripe MPP active on POST /checkout ($${amount}, ${livemode ? 'LIVE' : 'test'} mode)`);
         return state;

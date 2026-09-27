@@ -50,3 +50,24 @@ test('initMpp prices MPP from the same source as x402', async () => {
     process.env = saved;
   }
 });
+
+test('MPP_LIVE lets a live key run on a testnet store, priced at mainnet not testnet', async () => {
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, { STRIPE_SECRET_KEY: 'sk_live_x', STRIPE_PROFILE_ID: 'profile_x', X402_ENV: 'testnet', X402_PRICE: '$0.50', MPP_LIVE: 'true' });
+    delete process.env.MPP_ENABLED; delete process.env.MPP_PRICE;
+    let s = await mpp.initMpp({ stripeClient: {} });
+    assert.equal(s.active, true);
+    assert.equal(s.livemode, true);
+    assert.equal(s.amount, '45.00');
+
+    process.env.MPP_PRICE = '$39';
+    s = await mpp.initMpp({ stripeClient: {} });
+    assert.equal(s.amount, '39.00');
+
+    process.env.MPP_PRICE = 'abc';
+    assert.equal((await mpp.initMpp({ stripeClient: {} })).active, false);
+  } finally {
+    process.env = saved;
+  }
+});

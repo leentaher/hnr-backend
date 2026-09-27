@@ -33,4 +33,4 @@ function checkoutDescription() {
   return `Buy the "My Agent Bought Me This" embroidered hat — ${priceStr} USDC on ${networkLabel}`;
 }
 
-module.exports = { getPricing, checkoutDescription };
+module.exports = { getPricing, checkoutDescription, MAINNET_DEFAULT_PRICE };
