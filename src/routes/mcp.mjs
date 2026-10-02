@@ -170,6 +170,11 @@ export function createMcpRouter() {
         return;
       }
 
+      // Unknown session ID (server restarted/redeployed, or idle-pruned): per the MCP
+      // Streamable HTTP spec, 404 tells the client to re-initialize on its own.
+      if (sessionId) {
+        return res.status(404).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found. Re-initialize.' }, id: null });
+      }
       res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request' }, id: null });
     } catch (err) {
       console.error('[mcp] Error:', err);
@@ -179,9 +184,8 @@ export function createMcpRouter() {
 
   const handleSession = async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
-    if (!sessionId || !transports[sessionId]) {
-      return res.status(400).send('Invalid or missing session ID');
-    }
+    if (!sessionId) return res.status(400).send('Missing session ID');
+    if (!transports[sessionId]) return res.status(404).send('Session not found. Re-initialize.');
     await transports[sessionId].handleRequest(req, res);
   };
 
