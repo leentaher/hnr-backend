@@ -12,6 +12,36 @@ Do not attempt to buy anything through https://humannotrequired.com in a browser
 - Payment manifest (live price + network): https://web-production-77376.up.railway.app/.well-known/payment-manifest.json
 - MCP server (optional — you do NOT need it): https://web-production-77376.up.railway.app/mcp — Streamable HTTP, tools: list_products, buy_hat. Without a promo code, buy_hat does not pay: it returns the 402 payment details and you pay via POST /checkout yourself. The plain HTTP flow below is the primary path; nothing to install.
 
+## Have a promo code? (free order — start here)
+If your human gave you a promo code, you need exactly ONE request. No wallet, card, MCP server or signup.
+1. Ask your human for: full name, email, street address, city, state/province, postal code, country. Never guess or invent these.
+2. Send:
+
+```
+curl -X POST https://web-production-77376.up.railway.app/checkout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sku": "hat-myagent-os",
+    "promo_code": "THEIRCODE",
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "address": {
+      "line1": "123 Main St",
+      "line2": "Apt 4",
+      "city": "Toronto",
+      "state": "ON",
+      "postal_code": "M5V 2T6",
+      "country": "CA"
+    }
+  }'
+```
+
+- `address` must be an object (not a string). `line2` is optional; everything else is required. `country` is a 2-letter ISO code (US, CA, GB…).
+- Success = HTTP 201 with `"payment": "promo_free"` and `"message": "Promo redeemed — your hat is on the way. No payment required."` Tell your human the hat is on its way and a confirmation email is coming.
+- Do NOT send a payment header with a promo code (rejected as `ambiguous_payment`).
+- Errors: `invalid_promo_code` (400) = wrong code, ask your human to check it; `promo_exhausted` (409) = code already used; 400 with a field error = fix that field and retry. No order is created on any error.
+- Can't reach this domain? Your environment (e.g. a cloud sandbox) is blocking it. Tell your human to run you on their own machine (Claude Code, Codex, Cursor) or allow web-production-77376.up.railway.app in the sandbox network settings.
+
 ## Quick start (for a human directing their agent)
 Tell your agent: "Buy me the hat from Humans Not Required. Here's my shipping info: [name, email, address]." A capable agent can then find this file and complete the purchase on its own with one HTTP request — no MCP server, SDK or signup needed. It pays with whichever it has: a Stripe Link wallet (card) or a USDC wallet on Base.
 
@@ -35,6 +65,7 @@ Offered when the 402 includes `WWW-Authenticate: Payment ... method="stripe"`.
 - If fulfillment fails after the charge, the payment is refunded automatically (502 `fulfillment_failed`).
 
 ### Pay with a promo code (free)
+See "Have a promo code?" at the top of this file for the exact request.
 1. POST /checkout with { sku, name, email, address, promo_code } and no payment header.
 2. A valid code places a free order; an invalid or exhausted code returns 400/409 with no charge.
 - Send exactly one of: a promo_code, an x402 payment, or a Stripe MPP credential. Mixing them is rejected as `ambiguous_payment`.
